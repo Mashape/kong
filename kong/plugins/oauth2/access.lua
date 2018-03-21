@@ -165,13 +165,23 @@ local function authorize(conf)
 
       if not allowed_redirect_uris then
         response_params = {[ERROR] = "invalid_client", error_description = "Invalid client authentication" }
-      else
-        redirect_uri = parameters[REDIRECT_URI] and parameters[REDIRECT_URI] or allowed_redirect_uris[1]
 
-        if not utils.table_contains(allowed_redirect_uris, redirect_uri) then
-          response_params = {[ERROR] = "invalid_request", error_description = "Invalid " .. REDIRECT_URI .. " that does not match with any redirect_uri created with the application" }
-          -- redirect_uri used in this case is the first one registered with the application
-          redirect_uri = allowed_redirect_uris[1]
+      else
+        -- Since default redirect URIs are now patterns, it's not safe to use them directly in the
+        -- comparison below. Instead, if one is not supplied, just use the one registered with
+        -- the application. In either case, we should try to remove the start/end of string characters.
+        -- This is pretty hacky, perhaps a "default redirect URI" option should be provided instead.
+        redirect_uri = parameters[REDIRECT_URI]
+
+        if redirect_uri then
+          if not utils.table_contains_regex(allowed_redirect_uris, redirect_uri) then
+            response_params = {[ERROR] = "invalid_request", error_description = "Invalid " .. REDIRECT_URI .. " that does not match with any redirect_uri created with the application" }
+            -- redirect_uri used in this case is the first one registered with the application
+            redirect_uri = string.gsub(allowed_redirect_uris[1],"[%^%$]","")
+          end
+
+        else
+          redirect_uri = string.gsub(allowed_redirect_uris[1],"[%^%$]","")
         end
       end
 
@@ -296,8 +306,10 @@ local function issue_token(conf)
         invalid_client_properties = { status = 401, www_authenticate = "Basic realm=\"OAuth2.0\""}
       end
     else
-      local redirect_uri = parameters[REDIRECT_URI] and parameters[REDIRECT_URI] or allowed_redirect_uris[1]
-      if not utils.table_contains(allowed_redirect_uris, redirect_uri) then
+      -- Since default redirect URIs are now patterns, it's not safe to use them directly before the
+      -- comparison below  as before. Instead, if one is not supplied, don't do the comparison
+      local redirect_uri = parameters[REDIRECT_URI]
+      if redirect_uri and not utils.table_contains_regex(allowed_redirect_uris, redirect_uri) then
         response_params = {[ERROR] = "invalid_request", error_description = "Invalid " .. REDIRECT_URI .. " that does not match with any redirect_uri created with the application" }
       end
     end
