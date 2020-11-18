@@ -730,6 +730,8 @@ for _, ldap_strategy in pairs(ldap_strategies) do
             assert(id == user.id)
             local value = assert.request(res).has.header("x-credential-identifier")
             assert.equal(keyauth.id, value)
+            local auth_type = assert.request(res).has.header("x-authentication-type")
+            assert.equal("ldap-auth", auth_type)
             assert.request(res).has.no.header("x-credential-username")
           end)
 
@@ -749,6 +751,8 @@ for _, ldap_strategy in pairs(ldap_strategies) do
             assert.equal(user.id, id)
             local value = assert.request(res).has.header("x-credential-identifier")
             assert.equal(keyauth.id, value)
+            local auth_type = assert.request(res).has.header("x-authentication-type")
+            assert.equal("ldap-auth", auth_type)
             assert.request(res).has.no.header("x-credential-username")
           end)
 
@@ -765,8 +769,10 @@ for _, ldap_strategy in pairs(ldap_strategies) do
             assert.request(res).has.no.header("x-anonymous-consumer")
             local id = assert.request(res).has.header("x-credential-identifier")
             assert.equal("einstein", id)
-            local id = assert.request(res).has.header("x-credential-username")
-            assert.equal("einstein", id)
+            local auth_type = assert.request(res).has.header("x-authentication-type")
+            assert.equal("ldap-auth", auth_type)
+            local username = assert.request(res).has.header("x-credential-username")
+            assert.equal("einstein", username)
           end)
 
           it("passes with no credential provided", function()
@@ -783,6 +789,7 @@ for _, ldap_strategy in pairs(ldap_strategies) do
             assert.equal(id, anonymous.id)
             assert.request(res).has.no.header("x-credential-identifier")
             assert.request(res).has.no.header("x-credential-username")
+            assert.request(res).has.no.header("x-authentication-type")
           end)
         end)
       end)

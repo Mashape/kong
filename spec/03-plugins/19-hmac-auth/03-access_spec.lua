@@ -780,6 +780,7 @@ for _, strategy in helpers.each_strategy() do
         assert.equal(consumer.username, parsed_body.headers["x-consumer-username"])
         assert.equal(credential.username, parsed_body.headers["x-credential-identifier"])
         assert.equal(credential.username, parsed_body.headers["x-credential-username"])
+        assert.equal("hmac-auth", parsed_body.headers["x-authentication-type"])
         assert.is_nil(parsed_body.headers["x-anonymous-consumer"])
       end)
 
@@ -967,6 +968,7 @@ for _, strategy in helpers.each_strategy() do
         assert.equal("bob", body.headers["x-consumer-username"])
         assert.equal(credential.username, body.headers["x-credential-identifier"])
         assert.equal(credential.username, body.headers["x-credential-username"])
+        assert.equal("hmac-auth", body.headers["x-authentication-type"])
         assert.is_nil(body.headers["x-anonymous-consumer"])
       end)
 
@@ -1052,6 +1054,7 @@ for _, strategy in helpers.each_strategy() do
         assert.equal('no-body', body.headers["x-consumer-username"])
         assert.equal(nil, body.headers["x-credential-identifier"])
         assert.equal(nil, body.headers["x-credential-username"])
+        assert.equal(nil, body.headers["x-authentication-type"])
 
       end)
 
