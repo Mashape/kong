@@ -1231,7 +1231,10 @@ local function get_balancer_health(upstream_id)
   end
 
   local healthchecker
-  local balancer_status
+
+  local balancer_status = balancer:getStatus()
+  local balancer_health = balancer_status.healthy and "HEALTHY" or "UNHEALTHY"
+
   local health = "HEALTHCHECKS_OFF"
   if is_upstream_using_healthcheck(upstream) then
     healthchecker = healthcheckers[balancer]
@@ -1239,12 +1242,14 @@ local function get_balancer_health(upstream_id)
       return nil, "healthchecker not found"
     end
 
-    balancer_status = balancer:getStatus()
-    health = balancer_status.healthy and "HEALTHY" or "UNHEALTHY"
+    -- for backwards compatibility
+    health = balancer_health
   end
+
 
   return {
     health = health,
+    balancer_health = balancer_health,
     id = upstream_id,
     details = balancer_status,
   }

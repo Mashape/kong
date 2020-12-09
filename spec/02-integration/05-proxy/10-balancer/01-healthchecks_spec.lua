@@ -331,6 +331,12 @@ for _, strategy in helpers.each_strategy() do
       assert.is.table(health.data[1])
       assert.equals("HEALTHCHECKS_OFF", health.data[1].health)
       assert.equals("HEALTHCHECKS_OFF", health.data[1].data.addresses[1].health)
+
+      local balancer_health = bu.get_balancer_health(upstream_name)
+      assert.is.table(balancer_health)
+      assert.is.table(balancer_health.data)
+      assert.equals("HEALTHCHECKS_OFF", balancer_health.data.health)
+      assert.equals("HEALTHY", balancer_health.data.balancer_health)
     end)
 
   end)
@@ -535,6 +541,14 @@ for _, strategy in helpers.each_strategy() do
               { port = proxy_port_2, oks = 10, fails = 0, last_status = 200 },
               { port = proxy_port_1, oks = 10, fails = 0, last_status = 200 },
             }
+
+            local done = false
+            finally(function()
+              if not done then
+                server:done()
+              end
+            end)
+
             for i, test in ipairs(seq) do
               local oks, fails, last_status = bu.client_requests(10, api_host, "127.0.0.1", test.port)
               assert.same(test.oks, oks, "iteration " .. tostring(i))
@@ -544,6 +558,7 @@ for _, strategy in helpers.each_strategy() do
 
             -- collect server results
             local _, server_oks, server_fails = server:done()
+            done = true
             assert.same(40, server_oks)
             assert.same(20, server_fails)
 
@@ -1048,8 +1063,10 @@ for _, strategy in helpers.each_strategy() do
 
                 if health_threshold[i] < 100 then
                   assert.equals("HEALTHY", health.data.health)
+                  assert.equals("HEALTHY", health.data.balancer_health)
                 else
                   assert.equals("UNHEALTHY", health.data.health)
+                  assert.equals("UNHEALTHY", health.data.balancer_health)
                 end
 
                 -- 75% healthy
@@ -1064,8 +1081,10 @@ for _, strategy in helpers.each_strategy() do
 
                 if health_threshold[i] < 75 then
                   assert.equals("HEALTHY", health.data.health)
+                  assert.equals("HEALTHY", health.data.balancer_health)
                 else
                   assert.equals("UNHEALTHY", health.data.health)
+                  assert.equals("UNHEALTHY", health.data.balancer_health)
                 end
 
                 -- 50% healthy
