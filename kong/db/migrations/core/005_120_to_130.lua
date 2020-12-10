@@ -58,8 +58,7 @@ return {
       END$$;
     ]],
     teardown = function(connector)
-      assert(connector:connect_migrations())
-      for upstream, err in connector:iterate([[SELECT * FROM "upstreams";]]) do
+      for upstream, err in connector:iterate("SELECT id, algorithm, hash_on FROM upstreams") do
         if err then
           return nil, err
         end
@@ -87,6 +86,8 @@ return {
 
         ::continue::
       end
+
+      return true
     end,
 
   },
@@ -118,10 +119,9 @@ return {
       CREATE INDEX IF NOT EXISTS services_client_certificate_id_idx ON services(client_certificate_id);
     ]],
     teardown = function(connector)
+      local coordinator = assert(connector:get_stored_connection())
       local cassandra = require "cassandra"
-      local coordinator = assert(connector:connect_migrations())
-
-      for rows, err in coordinator:iterate([[SELECT * FROM upstreams;]]) do
+      for rows, err in coordinator:iterate("SELECT id, algorithm, hash_on FROM upstreams") do
         if err then
           return nil, err
         end
@@ -139,12 +139,8 @@ return {
             algorithm = "consistent-hashing"
           end
 
-          local _, err = connector:query([[
-            UPDATE upstreams
-            SET algorithm = ?
-            WHERE id = ?
-          ]], {
-            algorithm,
+          local _, err = coordinator:execute("UPDATE upstreams SET algorithm = ? WHERE id = ?", {
+            cassandra.text(algorithm),
             cassandra.uuid(upstream.id),
           })
           if err then
@@ -153,8 +149,9 @@ return {
 
           ::continue::
         end
-
       end
+
+      return true
     end,
 
   },

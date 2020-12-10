@@ -117,10 +117,12 @@ for _, strategy in helpers.each_strategy() do
         return pl_path.exists(FILE_LOG_PATH) and pl_path.getsize(FILE_LOG_PATH) > 0
       end, 10)
 
-      local file_log = pl_file.read(FILE_LOG_PATH)
-      local log_message = cjson.decode(pl_stringx.strip(file_log))
+      local log = pl_file.read(FILE_LOG_PATH)
+      local log_message = cjson.decode(pl_stringx.strip(log):match("%b{}"))
       assert.same("127.0.0.1", log_message.client_ip)
       assert.same(uuid, log_message.request.headers["file-log-uuid"])
+      assert.is_number(log_message.request.size)
+      assert.is_number(log_message.response.size)
     end)
 
     it("logs to file #grpc", function()
@@ -144,8 +146,8 @@ for _, strategy in helpers.each_strategy() do
         return pl_path.exists(FILE_LOG_PATH) and pl_path.getsize(FILE_LOG_PATH) > 0
       end, 10)
 
-      local file_log = pl_file.read(FILE_LOG_PATH)
-      local log_message = cjson.decode(pl_stringx.strip(file_log))
+      local log = pl_file.read(FILE_LOG_PATH)
+      local log_message = cjson.decode(pl_stringx.strip(log):match("%b{}"))
       assert.same("127.0.0.1", log_message.client_ip)
       assert.same(uuid, log_message.request.headers["file-log-uuid"])
     end)
@@ -171,8 +173,8 @@ for _, strategy in helpers.each_strategy() do
         return pl_path.exists(FILE_LOG_PATH) and pl_path.getsize(FILE_LOG_PATH) > 0
       end, 10)
 
-      local file_log = pl_file.read(FILE_LOG_PATH)
-      local log_message = cjson.decode(pl_stringx.strip(file_log))
+      local log = pl_file.read(FILE_LOG_PATH)
+      local log_message = cjson.decode(pl_stringx.strip(log):match("%b{}"))
       assert.same("127.0.0.1", log_message.client_ip)
       assert.same(uuid, log_message.request.headers["file-log-uuid"])
     end)

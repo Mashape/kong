@@ -3,19 +3,22 @@
 local utils = require "kong.tools.utils"
 local openssl_pkey = require "resty.openssl.pkey"
 local openssl_x509 = require "resty.openssl.x509"
-local iputils = require "resty.iputils"
-local Schema = require("kong.db.schema")
-local socket_url = require("socket.url")
+local Schema = require "kong.db.schema"
+local socket_url = require "socket.url"
 local constants = require "kong.constants"
 local px = require "resty.mediador.proxy"
+local ipmatcher = require "resty.ipmatcher"
 
 
+local tostring = tostring
 local pairs = pairs
 local pcall = pcall
 local match = string.match
 local gsub = string.gsub
+local find = string.find
 local null = ngx.null
 local type = type
+local sub = string.sub
 
 
 local function validate_host(host)
@@ -63,20 +66,40 @@ local function validate_ip_or_cidr(ip)
 end
 
 
-local function validate_cidr_v4(ip)
-  local _, err = iputils.parse_cidr(ip)
-
-  -- It's an error only if the second variable is a string
-  if type(err) == "string" then
-    return nil, "invalid cidr range: " .. err
+local validate_cidr_v4
+do
+  local ip4_cidrs = {}
+  for i = 0, 32 do
+    ip4_cidrs[tostring(i)] = true
   end
 
-  return true
+  validate_cidr_v4 = function(ip_or_cidr)
+    local is_ipv4 = ipmatcher.parse_ipv4(ip_or_cidr)
+    if is_ipv4 then
+      return true
+    end
+
+    local p = find(ip_or_cidr, "/", 1, true)
+    if not p then
+      return nil, "invalid ipv4 cidr range: '" .. ip_or_cidr .. "'"
+    end
+
+    local ip = sub(ip_or_cidr, 1, p - 1)
+    local block = sub(ip_or_cidr, p + 1)
+    if ipmatcher.parse_ipv4(ip) and ip4_cidrs[block] then
+      return true
+    end
+
+    return nil, "invalid ipv4 cidr range: '" .. ip_or_cidr .. "'"
+  end
 end
 
 
 local function validate_path(path)
-  if not match(path, "^/[%w%.%-%_~%/%%]*$") then
+  if not match(path, "^/[%w%.%-%_%~%/%%%:%@" ..
+                     "%!%$%&%'%(%)%*%+%,%;%=" .. -- RFC 3986 "sub-delims"
+                     "]*$")
+  then
     return nil,
            "invalid path: '" .. path ..
            "' (characters outside of the reserved list of RFC 3986 found)",
@@ -89,7 +112,7 @@ local function validate_path(path)
 
     if raw:find("%", nil, true) then
       local err = raw:sub(raw:find("%%.?.?"))
-      return nil, "invalid url-encoded value: '" .. err .. "'"
+      return nil, "invalid url-encoded value: '" .. err .. "'", "percent"
     end
   end
 
@@ -179,7 +202,7 @@ end
 
 
 local function validate_certificate(cert)
-  local _, err =  openssl_x509.new(cert)
+  local _, err = openssl_x509.new(cert)
   if err then
     return nil, "invalid certificate: " .. err
   end
@@ -394,14 +417,21 @@ end
 
 local function validate_path_with_regexes(path)
 
-
   local ok, err, err_code = typedefs.path.custom_validator(path)
 
-  if ok or err_code ~= "rfc3986" then
+  if err_code == "percent" then
     return ok, err, err_code
   end
 
-  -- URI contains characters outside of the reserved list of RFC 3986:
+  -- We can't take an ok from validate_path as a success just yet,
+  -- because the router is currently more strict than RFC 3986 for
+  -- non-regex paths:
+  if ngx.re.find(path, [[^[a-zA-Z0-9\.\-_~/%]*$]]) then
+    return true
+  end
+
+  -- URI contains characters outside of the list recognized by the
+  -- router as valid non-regex paths.
   -- the value will be interpreted as a regex by the router; but is it a
   -- valid one? Let's dry-run it with the same options as our router.
   local _, _, err = ngx.re.find("", path, "aj")

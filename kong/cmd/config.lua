@@ -79,13 +79,13 @@ local function execute(args)
 
   package.path = conf.lua_package_path .. ";" .. package.path
 
-  local dc, err = declarative.new_config(conf)
+  _G.kong = kong_global.new()
+  kong_global.init_pdk(_G.kong, conf, nil) -- nil: latest PDK
+
+  local dc, err = declarative.new_config(conf, true)
   if not dc then
     error(err)
   end
-
-  _G.kong = kong_global.new()
-  kong_global.init_pdk(_G.kong, conf, nil) -- nil: latest PDK
 
   local db = assert(DB.new(conf))
   assert(db:init_connector())
@@ -105,15 +105,15 @@ local function execute(args)
     end
     filename = pl_path.abspath(filename)
 
-    local dc_table, err, _, vers = dc:parse_file(filename, accepted_formats)
-    if not dc_table then
+    local entities, err, _, meta = dc:parse_file(filename, accepted_formats)
+    if not entities then
       error("Failed parsing:\n" .. err)
     end
 
     if args.command == "db_import" then
       log("parse successful, beginning import")
 
-      local ok, err = declarative.load_into_db(dc_table)
+      local ok, err = declarative.load_into_db(entities, meta)
       if not ok then
         error("Failed importing:\n" .. err)
       end
@@ -126,7 +126,9 @@ local function execute(args)
         kong_reports.configure_ping(conf)
         kong_reports.toggle(true)
 
-        local report = { decl_fmt_version = vers }
+        local report = {
+          decl_fmt_version = meta._format_version,
+        }
         kong_reports.send("config-db-import", report)
       end
 

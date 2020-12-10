@@ -1,7 +1,7 @@
 local helpers = require "spec.helpers"
 local constants = require "kong.constants"
 local cjson = require "cjson"
-
+local pl_file = require "pl.file"
 
 for _, strategy in helpers.each_strategy() do
   local admin_client
@@ -131,5 +131,38 @@ for _, strategy in helpers.each_strategy() do
       assert.match("go_version=%d+.%d+.%d*", reports_data)
       proxy_client:close()
     end)
+
+    it("runs fake 'response' phase", function()
+      local proxy_client = assert(helpers.proxy_client())
+      local res = proxy_client:get("/", {
+        headers = { host  = "http-service.test" }
+      })
+      assert.res_status(200, res)
+      assert.equal("got from server 'openresty'", res.headers['x-hello-from-go-at-response'])
+
+    end)
+
+    describe("log phase has access to stuff", function()
+      it("puts that stuff in the log", function()
+        local proxy_client = assert(helpers.proxy_client())
+        local res = proxy_client:get("/", {
+          headers = { host  = "http-service.test" }
+        })
+        assert.res_status(200, res)
+        proxy_client:close()
+
+        local cfg = helpers.test_conf
+        local logs = pl_file.read(cfg.prefix .. "/" .. cfg.proxy_error_log)
+
+        for _, logpat in ipairs{
+          "access_start: %d%d+\n",
+          "shared_msg: Kong!\n",
+          "serialized:%b{}\n",
+        } do
+          assert.match(logpat, logs)
+        end
+      end)
+    end)
+
   end)
 end

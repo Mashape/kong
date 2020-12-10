@@ -1,6 +1,6 @@
 [![][kong-logo]][kong-url]
 
-[![Build Status][badge-travis-image]][badge-travis-url]
+[![Build Status][badge-action-image]][badge-action-url]
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/Kong/kong/blob/master/LICENSE)
 [![Twitter](https://img.shields.io/twitter/follow/thekonginc.svg?style=social&label=Follow)](https://twitter.com/intent/follow?screen_name=thekonginc)
 
@@ -40,11 +40,11 @@ transformations, and more through plugins.
 
 Kong has been built with the following leading principles:
 
-* **High Performance**: Sub-millisecond processing latency to support mission 
+* **High Performance**: Sub-millisecond processing latency to support mission
   critical use cases and high throughput.
-* **Extensibility**: With a pluggable architecture to extend Kong in Lua or GoLang 
+* **Extensibility**: With a pluggable architecture to extend Kong in Lua or GoLang
   with Kong's Plugin SDK.
-* **Portability**: To run on every platform, every cloud and to natively support 
+* **Portability**: To run on every platform, every cloud and to natively support
   Kubernetes via our modern Ingress Controller.
 
 ## Features
@@ -52,7 +52,7 @@ Kong has been built with the following leading principles:
 - **Cloud-Native**: Platform agnostic, Kong can run on any platform - from bare
   metal to containers - and it can run on every cloud natively.
 - **Kubernetes-Native**: Declaratively configure Kong with native Kubernetes CRDs
-  using the official Ingress Controller to route and connect all L4 + L7 traffic. 
+  using the official Ingress Controller to route and connect all L4 + L7 traffic.
 - **Dynamic Load Balancing**: Load balance traffic across multiple upstream
   services.
 - **Hash-based Load Balancing**: Load balance with consistent hashing/sticky
@@ -69,7 +69,7 @@ Kong has been built with the following leading principles:
 - **OAuth2.0**: Easily add OAuth2.0 authentication to your APIs.
 - **Logging**: Log requests and responses to your system over HTTP, TCP, UDP,
   or to disk.
-- **Security**: ACL, Bot detection, whitelist/blacklist IPs, etc...
+- **Security**: ACL, Bot detection, allow/deny IPs, etc...
 - **Syslog**: Logging to System log.
 - **SSL**: Setup a Specific SSL Certificate for an underlying service or API.
 - **Monitoring**: Live monitoring provides key load and performance server
@@ -108,6 +108,8 @@ code, other repos are also under active development:
   running Kong in Docker.
 - [Kong Packages](https://github.com/Kong/kong/releases): Pre-built packages
   for Debian, Red Hat, and OS X distributions (shipped with each release).
+- [Kong Gojira](https://github.com/Kong/gojira): a tool for
+  testing/developing multiple versions of Kong using containers.
 - [Kong Vagrant](https://github.com/Kong/kong-vagrant): A Vagrantfile for
   provisioning a development-ready environment for Kong.
 - [Kong Homebrew](https://github.com/Kong/homebrew-kong): Homebrew Formula
@@ -129,6 +131,12 @@ You can find every supported distribution at the [official installation page](ht
 
 ## Development
 
+We encourage community contributions to Kong. To make sure it is a smooth
+experience (both for you and for the Kong team), please read
+[CONTRIBUTING.md](#CONTRIBUTING.md) , [DEVELOPER.md](#DEVELOPER.md),
+[CODE_OF_CONDUCT.md](#CODE_OF_CONDUCT.md) and [COPYRIGHT](#COPYRIGHT) before
+you start.
+
 If you are planning on developing on Kong, you'll need a development
 installation. The `next` branch holds the latest unreleased source code.
 
@@ -141,6 +149,15 @@ Kit (PDK) Reference](https://docs.konghq.com/latest/pdk/).
 
 You can use Docker / docker-compose and a mounted volume to develop Kong by
 following the instructions on [Kong/kong-build-tools](https://github.com/Kong/kong-build-tools#developing-kong).
+
+#### Kong Gojira
+
+[Gojira](https://github.com/Kong/gojira) is a CLI that uses docker-compose
+internally to make the necessary setup of containers to get all
+dependencies needed to run a particular branch of Kong locally, as well
+as easily switching across versions, configurations and dependencies. It
+has support for running Kong in Hybrid (CP/DP) mode, testing migrations,
+running a Kong cluster, among other [features](https://github.com/Kong/gojira/blob/master/doc/manual.md).
 
 #### Vagrant
 
@@ -275,8 +292,8 @@ limitations under the License.
 [kong-logo]: https://konghq.com/wp-content/uploads/2018/05/kong-logo-github-readme.png
 [kong-benefits]: https://konghq.com/wp-content/uploads/2018/05/kong-benefits-github-readme.png
 [kong-nightly-master]: https://bintray.com/kong/kong-nightly/master
-[badge-travis-url]: https://travis-ci.org/Kong/kong/branches
-[badge-travis-image]: https://travis-ci.org/Kong/kong.svg?branch=master
+[badge-action-url]: https://github.com/Kong/kong/actions
+[badge-action-image]: https://github.com/Kong/kong/workflows/Build%20&%20Test/badge.svg
 
 [busted]: https://github.com/Olivine-Labs/busted
 [luacheck]: https://github.com/mpeterv/luacheck

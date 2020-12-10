@@ -1,22 +1,25 @@
 local helpers = require "spec.helpers"
-local utils   = require "kong.tools.utils"
+local utils = require "kong.tools.utils"
+local cjson = require "cjson"
 
 
-local lower   = string.lower
-local fmt     = string.format
-local md5     = ngx.md5
+local lower = string.lower
+local fmt = string.format
+local sha1_bin = ngx.sha1_bin
+local to_hex = require "resty.string".to_hex
 
 
 local function cache_key(conf, username, password)
-  local prefix = md5(fmt("%s:%u:%s:%s:%u",
-    lower(conf.ldap_host),
-    conf.ldap_port,
-    conf.base_dn,
-    conf.attribute,
-    conf.cache_ttl
-  ))
+  local hash = to_hex(sha1_bin(fmt("%s:%u:%s:%s:%u:%s:%s",
+                                   lower(conf.ldap_host),
+                                   conf.ldap_port,
+                                   conf.base_dn,
+                                   conf.attribute,
+                                   conf.cache_ttl,
+                                   username,
+                                   password)))
 
-  return fmt("ldap_auth_cache:%s:%s:%s", prefix, username, password)
+  return "ldap_auth_cache:" .. hash
 end
 
 
@@ -71,6 +74,15 @@ for _, ldap_strategy in pairs(ldap_strategies) do
           local route7 = bp.routes:insert {
             hosts = { "ldap7.com" },
           }
+
+          assert(bp.routes:insert {
+            protocols = { "grpc" },
+            paths = { "/hello.HelloService/" },
+            service = assert(bp.services:insert {
+              name = "grpc",
+              url = "grpc://localhost:15002",
+            }),
+          })
 
           local anonymous_user = bp.consumers:insert {
             username = "no-body"
@@ -205,6 +217,16 @@ for _, ldap_strategy in pairs(ldap_strategies) do
           local json = assert.response(res).has.jsonbody()
           assert.equal("Unauthorized", json.message)
         end)
+
+        it("rejects gRPC call without credentials", function()
+          local ok, err = helpers.proxy_client_grpc(){
+            service = "hello.HelloService.SayHello",
+            opts = {},
+          }
+          assert.falsy(ok)
+          assert.matches("Code: Unauthenticated", err)
+        end)
+
         it("returns 'invalid credentials' when credential value is in wrong format in authorization header", function()
           local res = assert(proxy_client:send {
             method  = "GET",
@@ -257,6 +279,18 @@ for _, ldap_strategy in pairs(ldap_strategies) do
           })
           assert.response(res).has.status(200)
         end)
+
+        it("accepts authorized gRPC calls", function()
+          local ok, res = helpers.proxy_client_grpc(){
+            service = "hello.HelloService.SayHello",
+            opts = {
+              ["-H"] = ("'Authorization: ldap %s'"):format(ngx.encode_base64("einstein:password")),
+            },
+          }
+          assert.truthy(ok)
+          assert.same({ reply = "hello noname" }, cjson.decode(res))
+        end)
+
         it("fails if credential type is invalid in post request", function()
           local r = assert(proxy_client:send {
             method = "POST",
@@ -302,6 +336,8 @@ for _, ldap_strategy in pairs(ldap_strategies) do
             }
           })
           assert.response(res).has.status(200)
+          local value = assert.request(res).has.header("x-credential-identifier")
+          assert.are.equal("einstein", value)
           local value = assert.request(res).has.header("x-credential-username")
           assert.are.equal("einstein", value)
           assert.request(res).has_not.header("x-anonymous-username")
@@ -426,6 +462,8 @@ for _, ldap_strategy in pairs(ldap_strategies) do
             }
           })
           assert.response(res).has.status(200)
+          local value = assert.request(res).has.header("x-credential-identifier")
+          assert.are.equal("einstein", value)
           local value = assert.request(res).has.header("x-credential-username")
           assert.are.equal("einstein", value)
           assert.request(res).has_not.header("x-anonymous-username")
@@ -469,6 +507,9 @@ for _, ldap_strategy in pairs(ldap_strategies) do
             })
             assert.response(res).has.status(200)
 
+            local value = assert.request(res).has.header("x-credential-identifier")
+            assert.are.equal("einstein", value)
+
             local value = assert.request(res).has.header("x-credential-username")
             assert.are.equal("einstein", value)
             assert.request(res).has_not.header("x-anonymous-username")
@@ -486,6 +527,8 @@ for _, ldap_strategy in pairs(ldap_strategies) do
             assert.are.equal("true", value)
             value = assert.request(res).has.header("x-consumer-username")
             assert.equal('no-body', value)
+            assert.request(res).has.no.header("x-credential-identifier")
+            assert.request(res).has.no.header("x-credential-username")
           end)
           it("works with wrong credentials and username in anonymous", function()
             local res = assert(proxy_client:send {
@@ -518,6 +561,7 @@ for _, ldap_strategy in pairs(ldap_strategies) do
         local proxy_client
         local user
         local anonymous
+        local keyauth
 
         lazy_setup(function()
           local bp = helpers.get_db_utils(strategy, {
@@ -592,7 +636,7 @@ for _, ldap_strategy in pairs(ldap_strategies) do
             },
           }
 
-          bp.keyauth_credentials:insert {
+          keyauth = bp.keyauth_credentials:insert {
             key      = "Mouse",
             consumer = { id = user.id },
           }
@@ -684,6 +728,9 @@ for _, ldap_strategy in pairs(ldap_strategies) do
             local id = assert.request(res).has.header("x-consumer-id")
             assert.not_equal(id, anonymous.id)
             assert(id == user.id)
+            local value = assert.request(res).has.header("x-credential-identifier")
+            assert.equal(keyauth.id, value)
+            assert.request(res).has.no.header("x-credential-username")
           end)
 
           it("passes with only the first credential provided", function()
@@ -700,6 +747,9 @@ for _, ldap_strategy in pairs(ldap_strategies) do
             local id = assert.request(res).has.header("x-consumer-id")
             assert.not_equal(id, anonymous.id)
             assert.equal(user.id, id)
+            local value = assert.request(res).has.header("x-credential-identifier")
+            assert.equal(keyauth.id, value)
+            assert.request(res).has.no.header("x-credential-username")
           end)
 
           it("passes with only the second credential provided", function()
@@ -713,6 +763,8 @@ for _, ldap_strategy in pairs(ldap_strategies) do
             })
             assert.response(res).has.status(200)
             assert.request(res).has.no.header("x-anonymous-consumer")
+            local id = assert.request(res).has.header("x-credential-identifier")
+            assert.equal("einstein", id)
             local id = assert.request(res).has.header("x-credential-username")
             assert.equal("einstein", id)
           end)
@@ -729,6 +781,8 @@ for _, ldap_strategy in pairs(ldap_strategies) do
             assert.request(res).has.header("x-anonymous-consumer")
             local id = assert.request(res).has.header("x-consumer-id")
             assert.equal(id, anonymous.id)
+            assert.request(res).has.no.header("x-credential-identifier")
+            assert.request(res).has.no.header("x-credential-username")
           end)
         end)
       end)

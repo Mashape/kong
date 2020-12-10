@@ -3,6 +3,7 @@ local utils       = require "kong.tools.utils"
 local singletons  = require "kong.singletons"
 local api_helpers = require "kong.api.api_helpers"
 local Endpoints   = require "kong.api.endpoints"
+local hooks       = require "kong.hooks"
 
 
 local ngx      = ngx
@@ -20,13 +21,23 @@ app.handle_error = api_helpers.handle_error
 app:before_filter(api_helpers.before_filter)
 
 
+assert(hooks.run_hook("api:init:pre", app))
+
+
 ngx.log(ngx.DEBUG, "Loading Admin API endpoints")
 
 
 -- Load core routes
-for _, v in ipairs({"kong", "health", "cache", "config", "clustering"}) do
+for _, v in ipairs({"kong", "health", "cache", "config", }) do
   local routes = require("kong.api.routes." .. v)
   api_helpers.attach_routes(app, routes)
+end
+
+
+-- Load custom DB routes
+for _, v in ipairs({"clustering", }) do
+  local routes = require("kong.api.routes." .. v)
+  api_helpers.attach_new_db_routes(app, routes)
 end
 
 
@@ -72,14 +83,6 @@ do
     end
   end
 
-  local function is_new_db_routes(routes)
-    for _, verbs in pairs(routes) do
-      if type(verbs) == "table" then -- ignore "before" functions
-        return verbs.schema
-      end
-    end
-  end
-
   local routes = {}
 
   -- DAO Routes
@@ -104,7 +107,7 @@ do
       local loaded, custom_endpoints = utils.load_module_if_exists("kong.plugins." .. k .. ".api")
       if loaded then
         ngx.log(ngx.DEBUG, "Loading API endpoints for plugin: ", k)
-        if is_new_db_routes(custom_endpoints) then
+        if api_helpers.is_new_db_routes(custom_endpoints) then
           customize_routes(routes, custom_endpoints, custom_endpoints.schema)
 
         else
@@ -116,6 +119,8 @@ do
       end
     end
   end
+
+  assert(hooks.run_hook("api:init:post", app, routes))
 
   api_helpers.attach_new_db_routes(app, routes)
 end

@@ -10,7 +10,7 @@ LUAROCKS=$(dep_version RESTY_LUAROCKS_VERSION)
 OPENSSL=$(dep_version RESTY_OPENSSL_VERSION)
 GO_PLUGINSERVER=$(dep_version KONG_GO_PLUGINSERVER_VERSION)
 
-DEPS_HASH=$(cat .ci/setup_env.sh .travis.yml .requirements | md5sum | awk '{ print $1 }')
+DEPS_HASH=$({ cat .ci/setup_env.sh .travis.yml .requirements Makefile; cat kong-*.rockspec | awk '/dependencies/,/}/'; } | md5sum | awk '{ print $1 }')
 INSTALL_CACHE=${INSTALL_CACHE:=/install-cache}
 INSTALL_ROOT=$INSTALL_CACHE/$DEPS_HASH
 
@@ -24,12 +24,7 @@ BUILD_TOOLS_DOWNLOAD=$INSTALL_ROOT/kong-build-tools
 GO_PLUGINSERVER_DOWNLOAD=$INSTALL_ROOT/go-pluginserver
 
 KONG_NGINX_MODULE_BRANCH=${KONG_NGINX_MODULE_BRANCH:=master}
-
-if [ $TRAVIS_BRANCH == "master" ] || [ ! -z "$TRAVIS_TAG" ]; then
-  KONG_BUILD_TOOLS_BRANCH=${KONG_BUILD_TOOLS_BRANCH:=master}
-else
-  KONG_BUILD_TOOLS_BRANCH=${KONG_BUILD_TOOLS_BRANCH:=next}
-fi
+KONG_BUILD_TOOLS_BRANCH=${KONG_BUILD_TOOLS_BRANCH:=master}
 
 if [ ! -d $BUILD_TOOLS_DOWNLOAD ]; then
     git clone -b $KONG_BUILD_TOOLS_BRANCH https://github.com/Kong/kong-build-tools.git $BUILD_TOOLS_DOWNLOAD
@@ -70,6 +65,7 @@ kong-ngx-build \
     --kong-nginx-module $KONG_NGINX_MODULE_BRANCH \
     --luarocks $LUAROCKS \
     --openssl $OPENSSL \
+    --debug \
     -j $JOBS
 
 OPENSSL_INSTALL=$INSTALL_ROOT/openssl

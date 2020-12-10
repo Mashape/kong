@@ -5,7 +5,7 @@ return {
     ]],
 
     teardown = function(connector)
-      assert(connector:query([[
+      local _, err = connector:query([[
         DO $$
         BEGIN
           ALTER TABLE IF EXISTS ONLY "plugins" DROP COLUMN "run_on";
@@ -20,7 +20,13 @@ return {
           DROP TABLE IF EXISTS "cluster_ca";
         END;
         $$;
-      ]]))
+      ]])
+
+      if err then
+        return nil, err
+      end
+
+      return true
     end,
   },
 
@@ -29,20 +35,24 @@ return {
     ]],
 
     teardown = function(connector)
-      assert(connector:query([[
-        DROP INDEX IF EXISTS plugins_run_on_idx;
+      local coordinator = assert(connector:get_stored_connection())
+      local _, err = coordinator:execute("DROP INDEX IF EXISTS plugins_run_on_idx")
+      if err then
+        return nil, err
+      end
 
+      _, err = coordinator:execute("DROP TABLE IF EXISTS cluster_ca")
+      if err then
+        return nil, err
+      end
 
-        DROP TABLE IF EXISTS cluster_ca;
-      ]]))
-
-      -- no need to drop the actual row from the database
+      -- no need to drop the actual column from the database
       -- (this operation is not reentrant in Cassandra)
       --[===[
-      assert(connector:query([[
-        ALTER TABLE plugins DROP run_on;
-      ]]))
+      assert(coordinator:execute("ALTER TABLE plugins DROP run_on"))
       ]===]
+
+      return true
     end,
   },
 }

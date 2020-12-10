@@ -30,6 +30,7 @@ cjson.decode_array_with_array_mt(true)
 local function new(self)
   local _REQUEST = {}
 
+  local HOST_PORTS             = self.configuration.host_ports or {}
 
   local MIN_HEADERS            = 1
   local MAX_HEADERS_DEFAULT    = 100
@@ -53,6 +54,8 @@ local function new(self)
   local X_FORWARDED_PROTO      = "X-Forwarded-Proto"
   local X_FORWARDED_HOST       = "X-Forwarded-Host"
   local X_FORWARDED_PORT       = "X-Forwarded-Port"
+  local X_FORWARDED_PATH       = "X-Forwarded-Path"
+  local X_FORWARDED_PREFIX     = "X-Forwarded-Prefix"
 
 
   ---
@@ -149,7 +152,7 @@ local function new(self)
   -- `X-Forwarded-Host` if it comes from a trusted source. The returned value
   -- is normalized to lower-case.
   --
-  -- Whether this function considers `X-Forwarded-Proto` or not depends on
+  -- Whether this function considers `X-Forwarded-Host` or not depends on
   -- several Kong configuration parameters:
   --
   -- * [trusted\_ips](https://getkong.org/docs/latest/configuration/#trusted_ips)
@@ -199,9 +202,16 @@ local function new(self)
   -- **Note**: we do not currently offer support for Forwarded HTTP Extension
   -- (RFC 7239) since it is not supported by ngx_http_realip_module.
   --
-  -- @function kong.request.get_forwareded_port
+  -- When running Kong behind the L4 port mapping (or forwarding) you can also
+  -- configure:
+  -- * [port\_maps](https://getkong.org/docs/latest/configuration/#port_maps)
+  --
+  -- `port_maps` configuration parameter enables this function to return the
+  -- port to which the port Kong is listening to is mapped to (in case they differ).
+  --
+  -- @function kong.request.get_forwarded_port
   -- @phases rewrite, access, header_filter, body_filter, log, admin_api
-  -- @treturn number the forwared port
+  -- @treturn number the forwarded port
   -- @usage
   -- kong.request.get_forwarded_port() -- 1234
   function _REQUEST.get_forwarded_port()
@@ -231,7 +241,87 @@ local function new(self)
       end
     end
 
-    return _REQUEST.get_port()
+    local host_port = ngx.ctx.host_port
+    if host_port then
+      return host_port
+    end
+
+    local port = _REQUEST.get_port()
+    return HOST_PORTS[port] or port
+  end
+
+
+  ---
+  -- Returns the path component of the request's URL, but also considers
+  -- `X-Forwarded-Path` if it comes from a trusted source. The value
+  -- is returned as a Lua string.
+  --
+  -- Whether this function considers `X-Forwarded-Path` or not depends on
+  -- several Kong configuration parameters:
+  --
+  -- * [trusted\_ips](https://getkong.org/docs/latest/configuration/#trusted_ips)
+  -- * [real\_ip\_header](https://getkong.org/docs/latest/configuration/#real_ip_header)
+  -- * [real\_ip\_recursive](https://getkong.org/docs/latest/configuration/#real_ip_recursive)
+  --
+  -- **Note**: we do not currently do any normalization on the request path.
+  --
+  -- @function kong.request.get_forwarded_path
+  -- @phases rewrite, access, header_filter, body_filter, log, admin_api
+  -- @treturn string the forwarded path
+  -- @usage
+  -- kong.request.get_forwarded_path() -- /path
+  function _REQUEST.get_forwarded_path()
+    check_phase(PHASES.request)
+
+    if self.ip.is_trusted(self.client.get_ip()) then
+      local path = _REQUEST.get_header(X_FORWARDED_PATH)
+      if path then
+        return path
+      end
+    end
+
+    local path = _REQUEST.get_path()
+    return path
+  end
+
+
+  ---
+  -- Returns the prefix path component of the request's URL that Kong stripped
+  -- before proxying to upstream. It also checks if `X-Forwarded-Prefix` comes
+  -- from a trusted source, and uses it as is when given. The value is returned
+  -- as a Lua string.
+  --
+  -- If a trusted `X-Forwarded-Prefix` is not passed, this function must be called after Kong has ran its router (`access` phase),
+  -- as the Kong router may strip the prefix of the request path. That stripped
+  -- path will become the return value of this function, unless there was already
+  -- a trusted `X-Forwarded-Prefix` header in the request.
+  --
+  -- Whether this function considers `X-Forwarded-Prefix` or not depends on
+  -- several Kong configuration parameters:
+  --
+  -- * [trusted\_ips](https://getkong.org/docs/latest/configuration/#trusted_ips)
+  -- * [real\_ip\_header](https://getkong.org/docs/latest/configuration/#real_ip_header)
+  -- * [real\_ip\_recursive](https://getkong.org/docs/latest/configuration/#real_ip_recursive)
+  --
+  -- **Note**: we do not currently do any normalization on the request path prefix.
+  --
+  -- @function kong.request.get_forwarded_prefix
+  -- @phases access
+  -- @treturn string|nil the forwarded path prefix or nil if prefix was not stripped
+  -- @usage
+  -- kong.request.get_forwarded_prefix() -- /prefix
+  function _REQUEST.get_forwarded_prefix()
+    check_phase(PHASES.request)
+
+    local prefix
+    if self.ip.is_trusted(self.client.get_ip()) then
+      prefix = _REQUEST.get_header(X_FORWARDED_PREFIX)
+      if prefix then
+        return prefix
+      end
+    end
+
+    return ngx.var.upstream_x_forwarded_prefix
   end
 
 
@@ -679,14 +769,22 @@ local function new(self)
         return nil, err, CONTENT_TYPE_FORM_DATA
       end
 
-      -- TODO: multipart library doesn't support multiple fields with same name
-      return multipart(body, content_type):get_all(), nil, CONTENT_TYPE_FORM_DATA
+      local parts = multipart(body, content_type)
+      if not parts then
+        return nil, "unable to decode multipart body", CONTENT_TYPE_FORM_DATA
+      end
+
+      local margs = parts:get_all_with_arrays()
+      if not margs then
+        return nil, "unable to read multipart values", CONTENT_TYPE_FORM_DATA
+      end
+
+      return margs, nil, CONTENT_TYPE_FORM_DATA
 
     else
       return nil, "unsupported content type '" .. content_type .. "'", content_type_lower
     end
   end
-
 
   return _REQUEST
 end
