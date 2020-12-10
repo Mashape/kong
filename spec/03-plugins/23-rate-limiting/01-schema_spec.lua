@@ -9,8 +9,23 @@ describe("Plugin: rate-limiting (schema)", function()
     assert.truthy(ok)
     assert.is_nil(err)
   end)
+
   it("proper config validates (bis)", function()
     local config = { second = 10, minute = 20, hour = 30, day = 40, month = 50, year = 60 }
+    local ok, _, err = v(config, schema_def)
+    assert.truthy(ok)
+    assert.is_nil(err)
+  end)
+
+  it("proper config validates (header)", function()
+    local config = { second = 10, limit_by = "header", header_name = "X-App-Version" }
+    local ok, _, err = v(config, schema_def)
+    assert.truthy(ok)
+    assert.is_nil(err)
+  end)
+
+  it("proper config validates (path)", function()
+    local config = { second = 10, limit_by = "path", path = "/request" }
     local ok, _, err = v(config, schema_def)
     assert.truthy(ok)
     assert.is_nil(err)
@@ -23,6 +38,7 @@ describe("Plugin: rate-limiting (schema)", function()
       assert.falsy(ok)
       assert.equal("The limit for hour(10.0) cannot be lower than the limit for second(20.0)", err.config)
     end)
+
     it("limits: smaller unit is less than bigger unit (bis)", function()
       local config = { second = 10, minute = 20, hour = 30, day = 40, month = 60, year = 50 }
       local ok, err = v(config, schema_def)
@@ -36,6 +52,20 @@ describe("Plugin: rate-limiting (schema)", function()
       assert.falsy(ok)
       assert.same({"at least one of these fields must be non-empty: 'config.second', 'config.minute', 'config.hour', 'config.day', 'config.month', 'config.year'" },
                   err["@entity"])
+    end)
+
+    it("is limited by header but the header_name field is missing", function()
+      local config = { second = 10, limit_by = "header", header_name = nil }
+      local ok, err = v(config, schema_def)
+      assert.falsy(ok)
+      assert.equal("required field missing", err.config.header_name)
+    end)
+
+    it("is limited by path but the path field is missing", function()
+      local config = { second = 10, limit_by = "path", path =  nil }
+      local ok, err = v(config, schema_def)
+      assert.falsy(ok)
+      assert.equal("required field missing", err.config.path)
     end)
   end)
 end)

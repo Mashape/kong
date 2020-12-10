@@ -60,13 +60,19 @@ log.set_lvl(log.levels.quiet) -- disable stdout logs in tests
 
 -- Add to package path so dao helpers can insert custom plugins
 -- (while running from the busted environment)
-package.path = CUSTOM_PLUGIN_PATH .. ";" .. package.path
+do
+  local paths = {}
+  table.insert(paths, os.getenv("KONG_LUA_PACKAGE_PATH"))
+  table.insert(paths, CUSTOM_PLUGIN_PATH)
+  table.insert(paths, package.path)
+  package.path = table.concat(paths, ";")
+end
 
 --- Returns the OpenResty version.
 -- Extract the current OpenResty version in use and returns
 -- a numerical representation of it.
 -- Ex: `1.11.2.2` -> `11122`
--- @name openresty_ver_num
+-- @function openresty_ver_num
 local function openresty_ver_num()
   local nginx_bin = assert(nginx_signals.find_nginx_bin())
   local _, _, _, stderr = pl_utils.executeex(string.format("%s -V", nginx_bin))
@@ -81,7 +87,7 @@ end
 
 --- Unindent a multi-line string for proper indenting in
 -- square brackets.
--- @name unindent
+-- @function unindent
 -- @usage
 -- local u = helpers.unindent
 --
@@ -119,7 +125,7 @@ end
 
 
 --- Set an environment variable
--- @name setenv
+-- @function setenv
 -- @param env (string) name of the environment variable
 -- @param value the value to set
 -- @return true on success, false otherwise
@@ -129,7 +135,7 @@ end
 
 
 --- Unset an environment variable
--- @name setenv
+-- @function setenv
 -- @param env (string) name of the environment variable
 -- @return true on success, false otherwise
 local function unsetenv(env)
@@ -138,7 +144,7 @@ end
 
 
 --- Write a yaml file.
--- @name make_yaml_file
+-- @function make_yaml_file
 -- @param content (string) the yaml string to write to the file
 -- @param filename (optional) if not provided, a temp name will be created
 -- @return filename of the file written
@@ -173,9 +179,10 @@ local dcbp
 local config_yml
 
 --- Iterator over DB strategies.
--- @name each_strategy
+-- @function each_strategy
 -- @param strategies (optional string array) explicit list of strategies to use,
 -- defaults to `{ "postgres", "cassandra" }`.
+-- @see all_strategies
 -- @usage
 -- -- repeat all tests for each strategy
 -- for _, strategy_name in helpers.each_strategy() do
@@ -185,13 +192,71 @@ local config_yml
 --
 --   end)
 -- end
-local each_strategy do
-  local default_strategies = {"postgres", "cassandra"}
+local function each_strategy() -- luacheck: ignore   -- required to trick ldoc into processing for docs
+end
+
+--- Iterator over all strategies, the DB ones and the DB-less one.
+-- To test with DB-less, check the example.
+-- @function all_strategies
+-- @param strategies (optional string array) explicit list of strategies to use,
+-- defaults to `{ "postgres", "cassandra", "off" }`.
+-- @see each_strategy
+-- @see write_declarative_config
+-- @usage
+-- -- example of using DB-less testing
+--
+-- -- use "all_strategies" to iterate over; "postgres", "cassandra", "off"
+-- for _, strategy in helpers.all_strategies() do
+--   describe(PLUGIN_NAME .. ": (access) [#" .. strategy .. "]", function()
+--
+--     lazy_setup(function()
+--
+--       -- when calling "get_db_utils" with "strategy=off", we still use
+--       -- "postgres" so we can write the test setup to the database.
+--       local bp = helpers.get_db_utils(
+--                      strategy == "off" and "postgres" or strategy,
+--                      nil, { PLUGIN_NAME })
+--
+--       -- Inject a test route, when "strategy=off" it will still be written
+--       -- to Postgres.
+--       local route1 = bp.routes:insert({
+--         hosts = { "test1.com" },
+--       })
+--
+--       -- start kong
+--       assert(helpers.start_kong({
+--         -- set the strategy
+--         database   = strategy,
+--         nginx_conf = "spec/fixtures/custom_nginx.template",
+--         plugins = "bundled," .. PLUGIN_NAME,
+--
+--         -- The call to "write_declarative_config" will write the contents of
+--         -- the database to a temporary file, which filename is returned.
+--         -- But only when "strategy=off".
+--         declarative_config = strategy == "off" and helpers.write_declarative_config() or nil,
+--
+--         -- the below lines can be omitted, but are just to prove that the test
+--         -- really runs DB-less despite that Postgres was used as intermediary
+--         -- storage.
+--         pg_host = strategy == "off" and "unknownhost.konghq.com" or nil,
+--         cassandra_contact_points = strategy == "off" and "unknownhost.konghq.com" or nil,
+--       }))
+--     end)
+--
+--     ... rest of your test file
+local function all_strategies() -- luacheck: ignore   -- required to trick ldoc into processing for docs
+end
+
+do
+  local def_db_strategies = {"postgres", "cassandra"}
+  local def_all_strategies = {"postgres", "cassandra", "off"}
   local env_var = os.getenv("KONG_DATABASE")
   if env_var then
-    default_strategies = { env_var }
+    def_db_strategies = { env_var }
+    def_all_strategies = { env_var }
   end
-  local available_strategies = pl_Set(default_strategies)
+  local db_available_strategies = pl_Set(def_db_strategies)
+  local all_available_strategies = pl_Set(def_all_strategies)
 
   local function iter(strategies, i)
     i = i + 1
@@ -203,11 +268,24 @@ local each_strategy do
 
   each_strategy = function(strategies)
     if not strategies then
-      return iter, default_strategies, 0
+      return iter, def_db_strategies, 0
     end
 
     for i = #strategies, 1, -1 do
-      if not available_strategies[strategies[i]] then
+      if not db_available_strategies[strategies[i]] then
+        table.remove(strategies, i)
+      end
+    end
+    return iter, strategies, 0
+  end
+
+  all_strategies = function(strategies)
+    if not strategies then
+      return iter, def_all_strategies, 0
+    end
+
+    for i = #strategies, 1, -1 do
+      if not all_available_strategies[strategies[i]] then
         table.remove(strategies, i)
       end
     end
@@ -245,7 +323,7 @@ end
 -- This will a.o. bootstrap the datastore and truncate the existing data that
 -- migth be in it. The BluePrint returned can be used to create test entities
 -- in the database.
--- @name get_db_utils
+-- @function get_db_utils
 -- @param strategy (optional) the database strategy to use, will default to the
 -- strategy in the test configuration.
 -- @param tables (optional) tables to truncate, this can be used to accelarate
@@ -282,6 +360,12 @@ local function get_db_utils(strategy, tables, plugins)
     end
   end
 
+  -- Clean workspaces from the context - otherwise, migrations will fail,
+  -- as some of them have dao calls
+  -- If `no_truncate` is falsey, `dao:truncate` and `db:truncate` are called,
+  -- and these set the workspace back again to the new `default` workspace
+  ngx.ctx.workspace = nil
+
   -- DAO (DB module)
   local db = assert(DB.new(conf, strategy))
   assert(db:init_connector())
@@ -301,11 +385,14 @@ local function get_db_utils(strategy, tables, plugins)
   -- not necessary to implement "truncate trigger" in Cassandra
   db:truncate("tags")
 
-  -- cleanup new DB tables
+  _G.kong.db = db
+
+  -- cleanup tables
   if not tables then
     assert(db:truncate())
 
   else
+    tables[#tables + 1] = "workspaces"
     truncate_tables(db, tables)
   end
 
@@ -325,13 +412,16 @@ local function get_db_utils(strategy, tables, plugins)
     end
   end
 
-  _G.kong.db = db
+  if strategy ~= "off" then
+    local workspaces = require "kong.workspaces"
+    workspaces.upsert_default(db)
+  end
 
   return bp, db
 end
 
 --- Gets the ml_cache instance.
--- @name get_cache
+-- @function get_cache
 -- @param db the database object
 -- @return ml_cache instance
 local function get_cache(db)
@@ -355,7 +445,7 @@ local unpack = function(t) return unpack(t, 1, t.n) end
 --- Prints all returned parameters.
 -- Simple debugging aid, it will pass all received parameters, hence will not
 -- influence the flow of the code. See also `fail`.
--- @name intercept
+-- @function intercept
 -- @see fail
 -- @usage -- modify
 -- local a,b = some_func(c,d)
@@ -377,7 +467,7 @@ local plugins_schema = assert(Entity.new(plugins_schema_def))
 
 
 --- Validate a plugin configuration against a plugin schema.
--- @name validate_plugin_config_schema
+-- @function validate_plugin_config_schema
 -- @param config The configuration to validate. This is not the full schema,
 -- only the `config` sub-object needs to be passed.
 -- @param schema_def The schema definition
@@ -427,7 +517,7 @@ end
 -- The check function will repeatedly be called (with a fixed interval), until
 -- the condition is met, or the
 -- timeout value is exceeded.
--- @name wait_until
+-- @function wait_until
 -- @param f check function that should return `truthy` when the condition has
 -- been met
 -- @param timeout (optional) maximum time to wait after which an error is
@@ -482,7 +572,7 @@ local admin_client -- forward declaration
 
 --- Waits for invalidation of a cached key by polling the mgt-api
 -- and waiting for a 404 response.
--- @name wait_for_invalidation
+-- @function wait_for_invalidation
 -- @param key (string) the cache-key to check
 -- @param timeout (optional) in seconds (for default see `wait_until`).
 local function wait_for_invalidation(key, timeout)
@@ -539,7 +629,7 @@ end
 -- * instead of this generic function there are also shortcut functions available
 -- for every method, eg. `client:get`, `client:post`, etc. See `http_client`.
 --
--- @name http_client:send
+-- @function http_client:send
 -- @param opts table with options. See [lua-resty-http](https://github.com/pintsized/lua-resty-http)
 function resty_http_proxy_mt:send(opts)
   local cjson = require "cjson"
@@ -629,7 +719,7 @@ end
 -- clients available as `proxy_client`, `admin_client`, etc. because these come
 -- pre-configured and connected to the underlying Kong test instance.
 --
--- @name http_client
+-- @function http_client
 -- @param host hostname to connect to
 -- @param port port to connect to
 -- @param timeout in seconds
@@ -651,7 +741,7 @@ end
 
 
 --- Returns the proxy port.
--- @name get_proxy_port
+-- @function get_proxy_port
 -- @param ssl (boolean) if `true` returns the ssl port
 -- @param http2 (boolean) if `true` returns the http2 port
 local function get_proxy_port(ssl, http2)
@@ -666,7 +756,7 @@ end
 
 
 --- Returns the proxy ip.
--- @name get_proxy_ip
+-- @function get_proxy_ip
 -- @param ssl (boolean) if `true` returns the ssl ip address
 -- @param http2 (boolean) if `true` returns the http2 ip address
 local function get_proxy_ip(ssl, http2)
@@ -681,7 +771,7 @@ end
 
 
 --- returns a pre-configured `http_client` for the Kong proxy port.
--- @name proxy_client
+-- @function proxy_client
 -- @param timeout (optional, number) the timeout to use
 local function proxy_client(timeout)
   local proxy_ip = get_proxy_ip(false)
@@ -692,7 +782,7 @@ end
 
 
 --- returns a pre-configured `http_client` for the Kong SSL proxy port.
--- @name proxy_ssl_client
+-- @function proxy_ssl_client
 -- @param timeout (optional, number) the timeout to use
 -- @param sni (optional, string) the sni to use
 local function proxy_ssl_client(timeout, sni)
@@ -706,7 +796,7 @@ end
 
 
 --- returns a pre-configured `http_client` for the Kong admin port.
--- @name admin_client
+-- @function admin_client
 -- @param timeout (optional, number) the timeout to use
 -- @param forced_port (optional, number) if provided will override the port in
 -- the Kong configuration with this port
@@ -723,7 +813,7 @@ function admin_client(timeout, forced_port)
 end
 
 --- returns a pre-configured `http_client` for the Kong admin SSL port.
--- @name admin_ssl_client
+-- @function admin_ssl_client
 -- @param timeout (optional, number) the timeout to use
 local function admin_ssl_client(timeout)
   local admin_ip, admin_port
@@ -761,7 +851,7 @@ end
 
 
 --- Creates an HTTP/2 client, based on the lua-http library.
--- @name http2_client
+-- @function http2_client
 -- @param host hostname to connect to
 -- @param port port to connect to
 -- @param tls boolean indicating whether to establish a tls session
@@ -770,6 +860,11 @@ local function http2_client(host, port, tls)
   local host = assert(host)
   local port = assert(port)
   tls = tls or false
+
+  -- if Kong/lua-pack is loaded, unload it first
+  -- so lua-http can use implementation from compat53.string
+  package.loaded.string.unpack = nil
+  package.loaded.string.pack = nil
 
   local request = require "http.request"
   local req = request.new_from_uri({
@@ -808,7 +903,7 @@ end
 
 
 --- returns a pre-configured cleartext `http2_client` for the Kong proxy port.
--- @name proxy_client_h2c
+-- @function proxy_client_h2c
 -- @return http2 client
 local function proxy_client_h2c()
   local proxy_ip = get_proxy_ip(false, true)
@@ -819,7 +914,7 @@ end
 
 
 --- returns a pre-configured TLS `http2_client` for the Kong SSL proxy port.
--- @name proxy_client_h2
+-- @function proxy_client_h2
 -- @return http2 client
 local function proxy_client_h2()
   local proxy_ip = get_proxy_ip(true, true)
@@ -831,7 +926,7 @@ end
 local exec -- forward declaration
 
 --- Creates a gRPC client, based on the grpcurl CLI.
--- @name grpc_client
+-- @function grpc_client
 -- @param host hostname to connect to
 -- @param port port to connect to
 -- @param opts table with options supported by grpcurl
@@ -864,12 +959,12 @@ local function grpc_client(host, port, opts)
       end
 
       local opts = gen_grpcurl_opts(pl_tablex.merge(t.opts, args.opts, true))
-      local ok, err, out = exec(string.format(t.cmd_template, opts, service))
+      local ok, _, out, err = exec(string.format(t.cmd_template, opts, service), true)
 
       if ok then
-        return ok, out
+        return ok, ("%s%s"):format(out or "", err or "")
       else
-        return nil, err
+        return nil, ("%s%s"):format(out or "", err or "")
       end
     end
   })
@@ -877,7 +972,7 @@ end
 
 
 --- returns a pre-configured `grpc_client` for the Kong proxy port.
--- @name proxy_client_grpc
+-- @function proxy_client_grpc
 -- @param host hostname to connect to
 -- @param port port to connect to
 -- @return grpc client
@@ -889,7 +984,7 @@ local function proxy_client_grpc(host, port)
 end
 
 --- returns a pre-configured `grpc_client` for the Kong SSL proxy port.
--- @name proxy_client_grpcs
+-- @function proxy_client_grpcs
 -- @param host hostname to connect to
 -- @param port port to connect to
 -- @return grpc client
@@ -922,7 +1017,7 @@ end
 -- * `opts.tls`: boolean, make it a ssl server if truthy.
 --
 -- * `opts.prefix`: string, a prefix to add to the echoed data received.
--- @name tcp_server
+-- @function tcp_server
 -- @param port (number) The port where the server will be listening on
 -- @param opts (table) options defining the server's behavior
 -- @return A thread object (from the `llthreads2` Lua package)
@@ -1029,7 +1124,7 @@ end
 --- Stops a local TCP server.
 -- A server previously created with `tcp_server` can be stopped prematurely by
 -- calling this function.
--- @name kill_tcp_server
+-- @function kill_tcp_server
 -- @param port the port the TCP server is listening on.
 -- @return oks, fails; the number of successes and failures processed by the server
 -- @see tcp_server
@@ -1049,7 +1144,7 @@ end
 -- close' response.
 -- If the request received has path `/delay` then the response will be delayed
 -- by 2 seconds.
--- @name http_server
+-- @function http_server
 -- @param `port` The port the server will be listening on
 -- @return A thread object (from the `llthreads2` Lua package)
 local function http_server(port, ...)
@@ -1095,11 +1190,17 @@ end
 
 
 --- Starts a local UDP server.
--- Accepts a single connection, reading once and then closes
--- @name udp_server
--- @param `port` The port the server will be listening on
--- @param `n` The number of packets that will be read
--- @param `timeout` Timeout per read
+-- Reads the specified number of packets and then closes.
+-- The server-thread return values depend on `n`:
+--
+-- * `n = 1`; returns the received packet (string), or `nil + err`
+--
+-- * `n > 1`; returns `data + err`, where `data` will always be a table with the
+--   received packets. So `err` must explicitly be checked for errors.
+-- @function udp_server
+-- @param `port` The port the server will be listening on (default `MOCK_UPSTREAM_PORT`)
+-- @param `n` The number of packets that will be read (default 1)
+-- @param `timeout` Timeout per read (default 360)
 -- @return A thread object (from the `llthreads2` Lua package)
 local function udp_server(port, n, timeout)
   local threads = require "llthreads2.ex"
@@ -1129,6 +1230,7 @@ local function udp_server(port, n, timeout)
         else
           i = i + 1
           data[i] = pkt
+          err = nil -- upon succes it would contain the remote ip address
         end
       end
       server:close()
@@ -1268,7 +1370,7 @@ local luassert = require "luassert.assert"
 --- Generic modifier "response".
 -- Will set a "response" value in the assertion state, so following
 -- assertions will operate on the value set.
--- @name response
+-- @function response
 -- @param response_obj results from `http_client:send` function (or any of the
 -- shortcuts `client:get`, `client:post`, etc).
 -- @usage
@@ -1298,7 +1400,7 @@ luassert:register("modifier", "response", modifier_response)
 -- The request must be inside a 'response' from the `mock_upstream`. If a request
 -- is send to the `mock_upstream` endpoint `"/request"`, it will echo the request
 -- received in the body of the response.
--- @name request
+-- @function request
 -- @param response_obj results from `http_client:send` function (or any of the
 -- shortcuts `client:get`, `client:post`, etc).
 -- @usage
@@ -1341,7 +1443,7 @@ luassert:register("modifier", "request", modifier_request)
 --- Generic fail assertion. A convenience function for debugging tests, always
 -- fails. It will output the values it was called with as a table, with an `n`
 -- field to indicate the number of arguments received. See also `intercept`.
--- @name fail
+-- @function fail
 -- @param ... any set of parameters to be displayed with the failure
 -- @see intercept
 -- @usage
@@ -1363,7 +1465,7 @@ luassert:register("assertion", "fail", fail,
 
 
 --- Assertion to check whether a value lives in an array.
--- @name contains
+-- @function contains
 -- @param expected The value to search for
 -- @param array The array to search for the value
 -- @param pattern (optional) If truthy, then `expected` is matched as a Lua string
@@ -1401,7 +1503,7 @@ luassert:register("assertion", "contains", contains,
 
 
 --- Assertion to check the status-code of a http response.
--- @name status
+-- @function status
 -- @param expected the expected status code
 -- @param response (optional) results from `http_client:send` function,
 -- alternatively use `response`.
@@ -1492,7 +1594,7 @@ luassert:register("assertion", "res_status", res_status,
 -- to check can be done through the `request` and `response` modifiers.
 --
 -- For a non-json body, see the `status` assertion.
--- @name jsonbody
+-- @function jsonbody
 -- @return the decoded json as a table
 -- @usage
 -- local res = assert(client:send { .. your request params here .. })
@@ -1541,7 +1643,7 @@ luassert:register("assertion", "jsonbody", jsonbody,
 
 --- Asserts that a named header in a `headers` subtable exists.
 -- Header name comparison is done case-insensitive.
--- @name header
+-- @function header
 -- @param name header name to look for (case insensitive).
 -- @see response
 -- @see request
@@ -1584,7 +1686,7 @@ luassert:register("assertion", "header", res_header,
 ---
 -- An assertion to look for a query parameter in a query string.
 -- Parameter name comparison is done case-insensitive.
--- @name queryparam
+-- @function queryparam
 -- @param name name of the query parameter to look up (case insensitive)
 -- @return value of the parameter
 -- @usage
@@ -1633,7 +1735,7 @@ luassert:register("assertion", "queryparam", req_query_param,
 -- Adds an assertion to look for a urlencoded form parameter in a request.
 -- Parameter name comparison is done case-insensitive. Use the `request` modifier to set
 -- the request to operate on.
--- @name formparam
+-- @function formparam
 -- @param name name of the form parameter to look up (case insensitive)
 -- @return value of the parameter
 -- @usage
@@ -1689,7 +1791,7 @@ luassert:register("assertion", "formparam", req_form_param,
 
 ---
 -- Assertion to ensure a value is greater than a base value.
--- @name is_gt
+-- @function is_gt
 -- @param base the base value to compare against
 -- @param value the value that must be greater than the base value
 local function is_gt(state, arguments)
@@ -1714,7 +1816,7 @@ luassert:register("assertion", "gt", is_gt,
 --- Generic modifier "certificate".
 -- Will set a "certificate" value in the assertion state, so following
 -- assertions will operate on the value set.
--- @name certificate
+-- @function certificate
 -- @param cert The cert text
 -- @see cn
 -- @usage
@@ -1732,7 +1834,7 @@ end
 luassert:register("modifier", "certificate", modifier_certificate)
 
 --- Assertion to check whether a CN is matched in an SSL cert.
--- @name cn
+-- @function cn
 -- @param expected The CN value
 -- @param cert The cert text
 -- @return the CN found in the cert
@@ -1775,7 +1877,7 @@ luassert:register("assertion", "cn", assert_cn,
 do
   --- Generic modifier "logfile"
   -- Will set an "errlog_path" value in the assertion state.
-  -- @name logfile
+  -- @function logfile
   -- @param path A path to the log file (defaults to the test prefix's
   -- errlog).
   -- @see line
@@ -1799,7 +1901,7 @@ do
 
   --- Assertion checking if any line from a file matches the given regex or
   -- substring.
-  -- @name line
+  -- @function line
   -- @param regex The regex to evaluate against each line.
   -- @param plain If true, the regex argument will be considered as a plain
   -- string.
@@ -1922,7 +2024,7 @@ do
 
 
   --- Creates a new DNS mock.
-  -- @name dns_mock.new
+  -- @function dns_mock.new
   -- @return dns_mock object
   function dns_mock.new()
     return setmetatable({}, dns_mock)
@@ -2078,7 +2180,7 @@ end
 --- Execute a command.
 -- Modified version of `pl.utils.executeex()` so the output can directly be
 -- used on an assertion.
--- @name execute
+-- @function execute
 -- @param cmd command string to execute
 -- @param pl_returns (optional) boolean: if true, this function will
 -- return the same values as Penlight's executeex.
@@ -2098,7 +2200,7 @@ end
 
 
 --- Execute a Kong command.
--- @name kong_exec
+-- @function kong_exec
 -- @param cmd Kong command to execute, eg. `start`, `stop`, etc.
 -- @param env (optional) table with kong parameters to set as environment
 -- variables, overriding the test config (each key will automatically be
@@ -2154,7 +2256,7 @@ end
 -- Creates the working directory if it does not exist.
 -- @param prefix (optional) path to the working directory, if omitted the test
 -- configuration will be used
--- @name prepare_prefix
+-- @function prepare_prefix
 local function prepare_prefix(prefix)
   return pl_dir.makepath(prefix or conf.prefix)
 end
@@ -2164,7 +2266,7 @@ end
 -- Deletes the working directory if it exists.
 -- @param prefix (optional) path to the working directory, if omitted the test
 -- configuration will be used
--- @name clean_prefix
+-- @function clean_prefix
 local function clean_prefix(prefix)
   prefix = prefix or conf.prefix
   if pl_path.exists(prefix) then
@@ -2198,7 +2300,7 @@ local function pid_dead(pid, timeout)
     -- still running, wait some more
     ngx.sleep(0.05)
   until ngx.now() >= max_time
-  
+
   return false
 end
 
@@ -2229,7 +2331,7 @@ end
 --- Return the actual configuration running at the given prefix.
 -- It may differ from the default, as it may have been modified
 -- by the `env` table given to start_kong.
--- @name get_running_conf
+-- @function get_running_conf
 -- @param prefix The prefix path where the kong instance is running
 -- @return The conf table of the running instance, or nil + error.
 local function get_running_conf(prefix)
@@ -2241,7 +2343,7 @@ end
 --- Return the actual Kong version the tests are running against.
 -- See [version.lua](https://github.com/kong/version.lua) for the format. This
 -- is mostly useful for testing plugins that should work with multiple Kong versions.
--- @name get_version
+-- @function get_version
 -- @return a `version` object
 -- @usage
 -- local version = require 'version'
@@ -2317,7 +2419,7 @@ end
 -- * Nginx server blocks to be inserted in the http module
 --
 -- * Nginx server blocks to be inserted in the stream module
--- @name start_kong
+-- @function start_kong
 -- @param env table with Kong configuration parameters (and values)
 -- @param tables list of database tables to truncate before starting
 -- @param preserve_prefix (boolean) if truthy, the prefix will not be cleaned
@@ -2427,7 +2529,7 @@ end
 
 
 -- Stop the Kong test instance.
--- @name stop_kong
+-- @function stop_kong
 -- @param prefix (optional) the prefix where the test instance runs, defaults to the test configuration.
 -- @param preserve_prefix (boolean) if truthy, the prefix will not be deleted after stopping
 -- @param preserve_dc
@@ -2460,13 +2562,14 @@ local function stop_kong(prefix, preserve_prefix, preserve_dc)
   if not preserve_dc then
     config_yml = nil
   end
+  ngx.ctx.workspace = nil
 
   return true
 end
 
 
 --- Restart Kong. Reusing declarative config when using `database=off`.
--- @name restart_kong
+-- @function restart_kong
 -- @param env see `start_kong`
 -- @param tables see `start_kong`
 -- @param fixtures see `start_kong`
@@ -2475,6 +2578,21 @@ local function restart_kong(env, tables, fixtures)
   stop_kong(env.prefix, true, true)
   return start_kong(env, tables, true, fixtures)
 end
+
+
+--- Creates a temporary declarative config file from the current db contents.
+-- This can be used in combo with the `all_strategies` iterator to ensure the
+-- test config is automatically generated from the DB using the regular helpers.
+-- @function write_declarative_file
+-- @return filename of the written config file (format will be yaml)
+-- @see all_strategies
+local function write_declarative_config()
+  local filename = pl_path.tmpname() .. ".yml"
+  os.remove(filename)
+  assert(kong_exec("config db_export "..filename))
+  return filename
+end
+
 
 
 ----------------
@@ -2578,7 +2696,9 @@ end
   clean_prefix = clean_prefix,
   wait_for_invalidation = wait_for_invalidation,
   each_strategy = each_strategy,
+  all_strategies = all_strategies,
   validate_plugin_config_schema = validate_plugin_config_schema,
+  write_declarative_config = write_declarative_config,
 
   -- miscellaneous
   intercept = intercept,
@@ -2607,6 +2727,17 @@ end
       wait_pid(pid_path, timeout)
     end
   end,
+
+  with_current_ws = function(ws,fn, db)
+    local old_ws = ngx.ctx.workspace
+    ngx.ctx.workspace = nil
+    ws = ws or {db.workspaces:select_by_name("default")}
+    ngx.ctx.workspace = ws[1] and ws[1].id
+    local res = fn()
+    ngx.ctx.workspace = old_ws
+    return res
+  end,
+
   signal = function(prefix, signal, pid_path)
     local kill = require "kong.cmd.utils.kill"
 

@@ -3,16 +3,19 @@ local constants = require "kong.constants"
 
 local kong = kong
 local type = type
+local error = error
+
+
+local KeyAuthHandler = {
+  PRIORITY = 1003,
+  VERSION = "2.3.0",
+}
+
+
+local EMPTY = {}
 
 
 local _realm = 'Key realm="' .. _KONG._NAME .. '"'
-
-
-local KeyAuthHandler = {}
-
-
-KeyAuthHandler.PRIORITY = 1003
-KeyAuthHandler.VERSION = "2.1.0"
 
 
 local function load_credential(key)
@@ -26,6 +29,8 @@ end
 
 
 local function set_consumer(consumer, credential)
+  kong.client.authenticate(consumer, credential)
+
   local set_header = kong.service.request.set_header
   local clear_header = kong.service.request.clear_header
 
@@ -47,21 +52,30 @@ local function set_consumer(consumer, credential)
     clear_header(constants.HEADERS.CONSUMER_USERNAME)
   end
 
-  kong.client.authenticate(consumer, credential)
+  if credential and credential.id then
+    set_header(constants.HEADERS.CREDENTIAL_IDENTIFIER, credential.id)
+  else
+    clear_header(constants.HEADERS.CREDENTIAL_IDENTIFIER)
+  end
+
+  clear_header(constants.HEADERS.CREDENTIAL_USERNAME)
 
   if credential then
-    if credential.username then
-      set_header(constants.HEADERS.CREDENTIAL_USERNAME, credential.username)
-    else
-      clear_header(constants.HEADERS.CREDENTIAL_USERNAME)
-    end
-
     clear_header(constants.HEADERS.ANONYMOUS)
-
   else
-    clear_header(constants.HEADERS.CREDENTIAL_USERNAME)
     set_header(constants.HEADERS.ANONYMOUS, true)
   end
+end
+
+
+local function get_body()
+  local body, err = kong.request.get_body()
+  if err then
+    kong.log.info("Cannot process request body: ", err)
+    return EMPTY
+  end
+
+  return body
 end
 
 
@@ -76,17 +90,6 @@ local function do_authentication(conf)
   local key
   local body
 
-  -- read in the body if we want to examine POST args
-  if conf.key_in_body then
-    local err
-    body, err = kong.request.get_body()
-
-    if err then
-      kong.log.err("Cannot process request body: ", err)
-      return nil, { status = 400, message = "Cannot process request body" }
-    end
-  end
-
   -- search in headers & querystring
   for i = 1, #conf.key_names do
     local name = conf.key_names[i]
@@ -98,6 +101,10 @@ local function do_authentication(conf)
 
     -- search the body, if we asked to
     if not v and conf.key_in_body then
+      if not body then
+        body = get_body()
+      end
+
       v = body[name]
     end
 
@@ -110,8 +117,17 @@ local function do_authentication(conf)
         kong.service.request.clear_header(name)
 
         if conf.key_in_body then
-          body[name] = nil
-          kong.service.request.set_body(body)
+          if not body then
+            body = get_body()
+          end
+
+          if body ~= EMPTY then
+            if body then
+              body[name] = nil
+            end
+
+            kong.service.request.set_body(body)
+          end
         end
       end
 
@@ -137,10 +153,7 @@ local function do_authentication(conf)
   local credential, err = cache:get(credential_cache_key, nil, load_credential,
                                     key)
   if err then
-    kong.log.err(err)
-    return kong.response.exit(500, {
-      message = "An unexpected error occurred"
-    })
+    return error(err)
   end
 
   -- no credential in DB, for this key, it is invalid, HTTP 401
@@ -190,14 +203,13 @@ function KeyAuthHandler:access(conf)
                                            kong.client.load_consumer,
                                            conf.anonymous, true)
       if err then
-        kong.log.err("failed to load anonymous consumer:", err)
-        return kong.response.exit(500, { message = "An unexpected error occurred" })
+        return error(err)
       end
 
-      set_consumer(consumer, nil)
+      set_consumer(consumer)
 
     else
-      return kong.response.exit(err.status, { message = err.message }, err.headers)
+      return kong.response.error(err.status, err.message, err.headers)
     end
   end
 end

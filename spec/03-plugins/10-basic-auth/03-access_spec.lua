@@ -45,9 +45,23 @@ for _, strategy in helpers.each_strategy() do
         hosts = { "basic-auth5.com" },
       }
 
+      local route_grpc = assert(bp.routes:insert {
+        protocols = { "grpc" },
+        paths = { "/hello.HelloService/" },
+        service = assert(bp.services:insert {
+          name = "grpc",
+          url = "grpc://localhost:15002",
+        }),
+      })
+
       bp.plugins:insert {
         name     = "basic-auth",
         route = { id = route1.id },
+      }
+
+      bp.plugins:insert {
+        name     = "basic-auth",
+        route = { id = route_grpc.id },
       }
 
       bp.plugins:insert {
@@ -204,6 +218,26 @@ for _, strategy in helpers.each_strategy() do
         assert.same({ message = "Invalid authentication credentials" }, json)
       end)
 
+      it("rejects gRPC call without credentials", function()
+        local ok, err = helpers.proxy_client_grpc(){
+          service = "hello.HelloService.SayHello",
+          opts = {},
+        }
+        assert.falsy(ok)
+        assert.matches("Code: Unauthenticated", err)
+      end)
+
+      it("accepts authorized gRPC calls", function()
+        local ok, res = helpers.proxy_client_grpc(){
+          service = "hello.HelloService.SayHello",
+          opts = {
+            ["-H"] = "'Authorization: Basic Ym9iOmtvbmc='",
+          },
+        }
+        assert.truthy(ok)
+        assert.same({ reply = "hello noname" }, cjson.decode(res))
+      end)
+
       it("authenticates valid credentials in Authorization", function()
         local res = assert(proxy_client:send {
           method  = "GET",
@@ -227,6 +261,8 @@ for _, strategy in helpers.each_strategy() do
         })
         local body = cjson.decode(assert.res_status(200, res))
         assert.equal('bob', body.headers["x-consumer-username"])
+        assert.equal('user123', body.headers["x-credential-identifier"])
+        assert.equal('user123', body.headers["x-credential-username"])
       end)
 
       it("authenticates with a password containing ':'", function()
@@ -240,6 +276,8 @@ for _, strategy in helpers.each_strategy() do
         })
         local body = cjson.decode(assert.res_status(200, res))
         assert.equal("bob", body.headers["x-consumer-username"])
+        assert.equal("user321", body.headers["x-credential-identifier"])
+        assert.equal('user321', body.headers["x-credential-username"])
       end)
 
       it("returns 401 for valid Base64 encoding", function()
@@ -285,6 +323,8 @@ for _, strategy in helpers.each_strategy() do
         local json = cjson.decode(body)
         assert.is_string(json.headers["x-consumer-id"])
         assert.equal("bob", json.headers["x-consumer-username"])
+        assert.equal("bob", json.headers["x-credential-identifier"])
+        assert.equal('bob', json.headers["x-credential-username"])
       end)
 
     end)
@@ -335,6 +375,8 @@ for _, strategy in helpers.each_strategy() do
         })
         local body = cjson.decode(assert.res_status(200, res))
         assert.equal('bob', body.headers["x-consumer-username"])
+        assert.equal('user123', body.headers["x-credential-identifier"])
+        assert.equal('user123', body.headers["x-credential-username"])
         assert.is_nil(body.headers["x-anonymous-consumer"])
       end)
 
@@ -349,6 +391,8 @@ for _, strategy in helpers.each_strategy() do
         local body = cjson.decode(assert.res_status(200, res))
         assert.equal('true', body.headers["x-anonymous-consumer"])
         assert.equal('no-body', body.headers["x-consumer-username"])
+        assert.equal(nil, body.headers["x-credential-identifier"])
+        assert.equal(nil, body.headers["x-credential-username"])
       end)
 
       it("works with wrong credentials and username in anonymous", function()

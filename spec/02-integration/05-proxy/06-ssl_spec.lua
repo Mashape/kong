@@ -45,6 +45,13 @@ for _, strategy in helpers.each_strategy() do
         service   = service2,
       }
 
+      bp.routes:insert {
+        protocols = { "https" },
+        hosts     = { "sni.example.com" },
+        snis      = { "sni.example.com" },
+        service   = service2,
+      }
+
       local service4 = bp.services:insert {
         name     = "api-3",
         protocol = helpers.mock_upstream_ssl_protocol,
@@ -338,6 +345,21 @@ for _, strategy in helpers.each_strategy() do
         assert.same({ message = "Please use HTTPS protocol" }, json)
         assert.contains("Upgrade", res.headers.connection)
         assert.equal("TLS/1.2, HTTP/1.1", res.headers.upgrade)
+
+        -- SNI case, see #6425
+        res = assert(proxy_client:send {
+          method  = "GET",
+          path    = "/",
+          headers = {
+            ["Host"] = "sni.example.com",
+          }
+        })
+
+        body = assert.res_status(426, res)
+        json = cjson.decode(body)
+        assert.same({ message = "Please use HTTPS protocol" }, json)
+        assert.contains("Upgrade", res.headers.connection)
+        assert.equal("TLS/1.2, HTTP/1.1", res.headers.upgrade)
       end)
 
       it("returns 301 when route has https_redirect_status_code set to 301", function()
@@ -575,6 +597,55 @@ for _, strategy in helpers.each_strategy() do
         local cert = get_cert("example.com")
         -- this fails if the "example.com" SNI wasn't inserted above
         assert.certificate(cert).has.cn("ssl-example.com")
+      end)
+    end)
+  end)
+
+  describe("SSL [#" .. strategy .. "]", function()
+
+    lazy_setup(function()
+      local bp = helpers.get_db_utils(strategy, {
+        "routes",
+        "services",
+        "certificates",
+        "snis",
+      })
+
+      local service = bp.services:insert {
+        name = "default-cert",
+      }
+
+      bp.routes:insert {
+        protocols = { "https" },
+        hosts     = { "example.com" },
+        service   = service,
+      }
+
+      local cert = bp.certificates:insert {
+        cert  = ssl_fixtures.cert,
+        key   = ssl_fixtures.key,
+      }
+
+      bp.snis:insert {
+        name = "*",
+        certificate = cert,
+      }
+
+      assert(helpers.start_kong {
+        database    = strategy,
+        nginx_conf  = "spec/fixtures/custom_nginx.template",
+      })
+
+    end)
+
+    lazy_teardown(function()
+      helpers.stop_kong()
+    end)
+
+    describe("handshake", function()
+      it("sets the default certificate of '*' SNI", function()
+        local cert = get_cert("example.com")
+        assert.cn("ssl-example.com", cert)
       end)
     end)
   end)

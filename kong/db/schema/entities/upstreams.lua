@@ -159,6 +159,7 @@ local r =  {
   name = "upstreams",
   primary_key = { "id" },
   endpoint_key = "name",
+  workspaceable = true,
   fields = {
     { id = typedefs.uuid, },
     { created_at = typedefs.auto_timestamp_s },
@@ -180,6 +181,7 @@ local r =  {
     }, },
     { tags = typedefs.tags },
     { host_header = typedefs.host_with_optional_port },
+    { client_certificate = { type = "foreign", reference = "certificates" }, },
   },
   entity_checks = {
     -- hash_on_header must be present when hashing on header
@@ -231,8 +233,10 @@ local r =  {
   -- This is a hack to preserve backwards compatibility with regard to the
   -- behavior of the hash_on field, and have it take place both in the Admin API
   -- and via declarative configuration.
-  shorthands = {
-    { algorithm = function(value)
+  shorthand_fields = {
+    { algorithm = {
+      type = "string",
+      func = function(value)
         if value == "least-connections" then
           return {
             algorithm = value,
@@ -243,11 +247,13 @@ local r =  {
             algorithm = value,
           }
         end
-      end
-    },
+      end,
+    }, },
     -- Then, if hash_on is set to some non-null value, adjust the algorithm
     -- field accordingly.
-    { hash_on = function(value)
+    { hash_on = {
+      type = "string",
+      func = function(value)
         if value == null then
           return {
             hash_on = "none"
@@ -264,7 +270,7 @@ local r =  {
           }
         end
       end
-    },
+    }, },
   },
 }
 

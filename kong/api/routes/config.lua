@@ -1,5 +1,4 @@
 local declarative = require("kong.db.declarative")
-local concurrency = require("kong.concurrency")
 local reports = require("kong.reports")
 local errors = require("kong.db.errors")
 
@@ -72,9 +71,9 @@ return {
       end
       self.params.check_hash = nil
 
-      local entities, _, err_t, vers, new_hash
+      local entities, _, err_t, meta, new_hash
       if self.params._format_version then
-        entities, _, err_t, vers, new_hash = dc:parse_table(self.params)
+        entities, _, err_t, meta, new_hash = dc:parse_table(self.params)
       else
         local config = self.params.config
         if not config then
@@ -82,38 +81,48 @@ return {
             message = "expected a declarative configuration"
           })
         end
-        entities, _, err_t, vers, new_hash =
+        entities, _, err_t, meta, new_hash =
           dc:parse_string(config, nil, accept, old_hash)
       end
 
-      if check_hash and new_hash and old_hash == new_hash then
-        return kong.response.exit(304)
-      end
-
       if not entities then
+        if check_hash and err_t and err_t.error == "configuration is identical" then
+          return kong.response.exit(304)
+        end
         return kong.response.exit(400, errors:declarative_config(err_t))
       end
 
-      local ok, err = concurrency.with_worker_mutex({ name = "dbless-worker" }, function()
-        return declarative.load_into_cache_with_events(entities, new_hash)
-      end)
-
-      if err == "no memory" then
-        kong.log.err("not enough cache space for declarative config")
-        return kong.response.exit(413, {
-          message = "Configuration does not fit in Kong cache"
-        })
-      end
+      local ok, err, ttl = declarative.load_into_cache_with_events(entities, meta, new_hash)
 
       if not ok then
+        if err == "busy" or err == "locked" then
+          return kong.response.exit(429, {
+            message = "Currently loading previous configuration"
+          }, { ["Retry-After"] = ttl })
+        end
+
+        if err == "timeout" then
+          return kong.response.exit(504, {
+            message = "Timed out while loading configuration"
+          })
+        end
+
+        if err == "no memory" then
+          kong.log.err("not enough cache space for declarative config")
+          return kong.response.exit(413, {
+            message = "Configuration does not fit in Kong cache"
+          })
+        end
+
         kong.log.err("failed loading declarative config into cache: ", err)
         return kong.response.exit(500, { message = "An unexpected error occurred" })
       end
 
-      _reports.decl_fmt_version = vers
+      _reports.decl_fmt_version = meta._format_version
 
       ngx.timer.at(0, reports_timer)
 
+      declarative.sanitize_output(entities)
       return kong.response.exit(201, entities)
     end,
   },

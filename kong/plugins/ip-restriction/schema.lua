@@ -8,15 +8,31 @@ return {
     { config = {
         type = "record",
         fields = {
-          { whitelist = { type = "array", elements = typedefs.cidr_v4, }, },
-          { blacklist = { type = "array", elements = typedefs.cidr_v4, }, },
+          { allow = { type = "array", elements = typedefs.ip_or_cidr, }, },
+          { deny = { type = "array", elements = typedefs.ip_or_cidr, }, },
+        },
+        shorthand_fields = {
+          -- deprecated forms, to be removed in Kong 3.0
+          { blacklist = {
+              type = "array",
+              elements = { type = "string", is_regex = true },
+              func = function(value)
+                return { deny = value }
+              end,
+          }, },
+          { whitelist = {
+              type = "array",
+              elements = { type = "string", is_regex = true },
+              func = function(value)
+                return { allow = value }
+              end,
+          }, },
         },
       },
     },
   },
   entity_checks = {
-    { only_one_of = { "config.whitelist", "config.blacklist" }, },
-    { at_least_one_of = { "config.whitelist", "config.blacklist" }, },
+    { at_least_one_of = { "config.allow", "config.deny" }, },
   },
 }
 

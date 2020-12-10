@@ -48,6 +48,15 @@ for _, strategy in helpers.each_strategy() do
         hosts     = { "correlation-error.com" },
       }
 
+      local route_grpc = assert(bp.routes:insert {
+        protocols = { "grpc" },
+        paths = { "/hello.HelloService/" },
+        service = assert(bp.services:insert {
+          name = "grpc",
+          url = "grpc://localhost:15002",
+        }),
+      })
+
       bp.plugins:insert {
         name     = "correlation-id",
         route = { id = route1.id },
@@ -86,13 +95,12 @@ for _, strategy in helpers.each_strategy() do
           echo_downstream = true,
         },
       }
-
       bp.plugins:insert {
         name     = "request-termination",
         route = { id = route5.id },
         config   = {
-          status_code = 200,
-          message     = "Success",
+          status_code = 418,
+          message     = "I'm a teapot",
         },
       }
 
@@ -119,6 +127,14 @@ for _, strategy in helpers.each_strategy() do
         route = { id = route7.id },
         config   = {
           access = true,
+        },
+      }
+
+      bp.plugins:insert {
+        name     = "correlation-id",
+        route = { id = route_grpc.id },
+        config   = {
+          echo_downstream = true,
         },
       }
 
@@ -173,6 +189,36 @@ for _, strategy in helpers.each_strategy() do
         local counter2 = string.match(id2, "#(%d)$")
         assert.equal("1", counter1)
         assert.equal("2", counter2)
+      end)
+
+      it("increments the counter part #grpc", function()
+        local ok, res = helpers.proxy_client_grpc(){
+          service = "hello.HelloService.SayHello",
+          opts = {
+            ["-v"] = true,
+          },
+        }
+        assert.truthy(ok)
+        local id1  = string.match(res, "kong%-request%-id: (" .. UUID_COUNTER_PATTERN .. ")")
+        assert.matches(UUID_COUNTER_PATTERN, id1)
+
+        local ok, res = helpers.proxy_client_grpc(){
+          service = "hello.HelloService.SayHello",
+          opts = {
+            ["-v"] = true,
+          },
+        }
+        assert.truthy(ok)
+
+        local id2  = string.match(res, "kong%-request%-id: (" .. UUID_COUNTER_PATTERN .. ")")
+        assert.matches(UUID_COUNTER_PATTERN, id2)
+        assert.not_equal(id1, id2)
+
+        -- only one nginx worker in our test instance allows us
+        -- to test this.
+        local counter1 = string.match(id1, "#(%d)$")
+        local counter2 = string.match(id2, "#(%d)$")
+        assert(counter2 > counter1)
       end)
     end)
 
@@ -313,9 +359,37 @@ for _, strategy in helpers.each_strategy() do
       assert.equal("foobar", id)
     end)
 
+    it("does not preserve an already existing empty header", function()
+      local res = assert(proxy_client:send {
+        method  = "GET",
+        path    = "/request",
+        headers = {
+          ["Host"]            = "correlation2.com",
+          ["Kong-Request-ID"] = ""
+        }
+      })
+      local body = assert.res_status(200, res)
+      local json = cjson.decode(body)
+      local id   = json.headers["kong-request-id"]
+      assert.not_equal("foobar", id)
+    end)
+
+    it("does not preserve an already existing header with space only", function()
+      local res = assert(proxy_client:send {
+        method  = "GET",
+        path    = "/request",
+        headers = {
+          ["Host"]            = "correlation2.com",
+          ["Kong-Request-ID"] = " "
+        }
+      })
+      local body = assert.res_status(200, res)
+      local json = cjson.decode(body)
+      local id   = json.headers["kong-request-id"]
+      assert.not_equal("foobar", id)
+    end)
+
     it("executes with echo_downstream when access did not execute", function()
-      -- Regression test for GH issue #3924
-      -- https://github.com/Kong/kong/issues/3924
       local res = assert(proxy_client:send {
         method  = "GET",
         path    = "/request",
@@ -323,9 +397,23 @@ for _, strategy in helpers.each_strategy() do
           ["Host"] = "correlation5.com",
         }
       })
-      local body = assert.res_status(200, res)
-      local json = cjson.decode(body)
-      assert.same({ message = "Success" }, json)
+      assert.response(res).has.status(418, res)
+      local downstream_id = assert.response(res).has.header("kong-request-id")
+      assert.matches(UUID_PATTERN, downstream_id)
+    end)
+
+    it("echoes incoming with echo_downstream when access did not execute", function()
+      local res = assert(proxy_client:send {
+        method  = "GET",
+        path    = "/request",
+        headers = {
+          ["Host"] = "correlation5.com",
+          ["kong-request-id"] = "my very personal id",
+        }
+      })
+      assert.response(res).has.status(418, res)
+      local downstream_id = assert.response(res).has.header("kong-request-id")
+      assert.equals("my very personal id", downstream_id)
     end)
   end)
 end

@@ -545,7 +545,6 @@ local function marshall_route(r)
 
   -- snis
 
-
   if snis then
     if type(snis) ~= "table" then
       return nil, "snis field must be a table"
@@ -846,8 +845,10 @@ do
               ctx.matches.uri = uri_t.value
 
               if m.uri_postfix then
+                ctx.matches.uri_prefix = sub(ctx.req_uri, 1, -(#m.uri_postfix + 1))
+
                 -- remove the uri_postfix group
-                m[#m]          = nil
+                m[#m] = nil
                 m.uri_postfix = nil
               end
 
@@ -860,6 +861,7 @@ do
           end
 
           -- plain or prefix match from the index
+          ctx.matches.uri_prefix = sub(ctx.req_uri, 1, #uri_t.value)
           ctx.matches.uri_postfix = sub(ctx.req_uri, #uri_t.value + 1)
           ctx.matches.uri = uri_t.value
 
@@ -882,8 +884,10 @@ do
             ctx.matches.uri = uri_t.value
 
             if m.uri_postfix then
+              ctx.matches.uri_prefix = sub(ctx.req_uri, 1, -(#m.uri_postfix + 1))
+
               -- remove the uri_postfix group
-              m[#m]          = nil
+              m[#m] = nil
               m.uri_postfix = nil
             end
 
@@ -898,6 +902,7 @@ do
           -- plain or prefix match (not from the index)
           local from, to = find(ctx.req_uri, uri_t.value, nil, true)
           if from == 1 then
+            ctx.matches.uri_prefix = sub(ctx.req_uri, 1, to)
             ctx.matches.uri_postfix = sub(ctx.req_uri, to + 1)
             ctx.matches.uri = uri_t.value
 
@@ -968,7 +973,7 @@ do
 
     [MATCH_RULES.SNI] = function(route_t, ctx)
       local sni = route_t.snis[ctx.sni]
-      if sni then
+      if sni or ctx.req_scheme == "http" then
         ctx.matches.sni = ctx.sni
         return true
       end
@@ -1230,6 +1235,10 @@ function _M.new(routes)
         return r1.max_uri_length > r2.max_uri_length
       end
 
+      --if #r1.route.protocols ~= #r2.route.protocols then
+      --  return #r1.route.protocols < #r2.route.protocols
+      --end
+
       if r1.route.created_at ~= nil and r2.route.created_at ~= nil then
         return r1.route.created_at < r2.route.created_at
       end
@@ -1348,6 +1357,7 @@ function _M.new(routes)
     ctx.req_method     = req_method
     ctx.req_uri        = req_uri
     ctx.req_host       = req_host
+    ctx.req_scheme     = req_scheme
     ctx.req_headers    = req_headers
     ctx.src_ip         = src_ip or ""
     ctx.src_port       = src_port or ""
@@ -1560,9 +1570,13 @@ function _M.new(routes)
               matched_route.route = routes_by_id[matched_route.route.id].route
             end
 
+            local request_prefix
+
             -- Path construction
 
             if matched_route.type == "http" then
+              request_prefix = matched_route.strip_uri and matches.uri_prefix or nil
+
               -- if we do not have a path-match, then the postfix is simply the
               -- incoming path, without the initial slash
               local request_postfix = matches.uri_postfix or sub(req_uri, 2, -1)
@@ -1651,6 +1665,7 @@ function _M.new(routes)
               upstream_scheme = upstream_url_t.scheme,
               upstream_uri    = upstream_uri,
               upstream_host   = upstream_host,
+              prefix          = request_prefix,
               matches         = {
                 uri_captures  = matches.uri_captures,
                 uri           = matches.uri,
@@ -1755,11 +1770,20 @@ function _M.new(routes)
       local src_ip = var.remote_addr
       local src_port = tonumber(var.remote_port, 10)
       local dst_ip = var.server_addr
-      local dst_port = tonumber(var.server_port, 10)
+      local dst_port = tonumber(ngx.ctx.host_port, 10)
+                    or tonumber(var.server_port, 10)
       -- error value for non-TLS connections ignored intentionally
       local sni, _ = server_name()
 
-      return find_route(nil, nil, nil, nil,
+      local scheme
+      if var.protocol == "UDP" then
+        scheme = "udp"
+
+      else
+        scheme = sni and "tls" or "tcp"
+      end
+
+      return find_route(nil, nil, nil, scheme,
                         src_ip, src_port,
                         dst_ip, dst_port,
                         sni)

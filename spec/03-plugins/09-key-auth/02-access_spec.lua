@@ -6,6 +6,7 @@ local utils   = require "kong.tools.utils"
 for _, strategy in helpers.each_strategy() do
   describe("Plugin: key-auth (access) [#" .. strategy .. "]", function()
     local proxy_client
+    local kong_cred
 
     lazy_setup(function()
       local bp = helpers.get_db_utils(strategy, {
@@ -72,6 +73,15 @@ for _, strategy in helpers.each_strategy() do
         hosts = { "key-auth10.com" },
       }
 
+      local route_grpc = assert(bp.routes:insert {
+        protocols = { "grpc" },
+        paths = { "/hello.HelloService/" },
+        service = assert(bp.services:insert {
+          name = "grpc",
+          url = "grpc://localhost:15002",
+        }),
+      })
+
       bp.plugins:insert {
         name     = "key-auth",
         route = { id = route1.id },
@@ -85,7 +95,7 @@ for _, strategy in helpers.each_strategy() do
         },
       }
 
-      bp.keyauth_credentials:insert {
+      kong_cred = bp.keyauth_credentials:insert {
         key      = "kong",
         consumer = { id = consumer.id },
       }
@@ -155,6 +165,11 @@ for _, strategy in helpers.each_strategy() do
         },
       }
 
+      bp.plugins:insert {
+        name     = "key-auth",
+        route = { id = route_grpc.id },
+      }
+
       assert(helpers.start_kong({
         database   = strategy,
         nginx_conf = "spec/fixtures/custom_nginx.template",
@@ -191,7 +206,7 @@ for _, strategy in helpers.each_strategy() do
         })
         assert.res_status(401, res)
         local body = assert.res_status(401, res)
-        assert.equal([[{"message":"No API key found in request"}]], body)
+        assert.same({message = "No API key found in request"}, cjson.decode(body))
       end)
       it("returns Unauthorized on missing credentials", function()
         local res = assert(proxy_client:send {
@@ -292,6 +307,33 @@ for _, strategy in helpers.each_strategy() do
               },
               body    = {
                 apikey = "kong",
+              }
+            })
+            assert.res_status(200, res)
+          end)
+          it("authenticates valid credentials in query", function()
+            local res = assert(proxy_client:send {
+              path    = "/request?apikey=kong",
+              headers = {
+                ["Host"]         = "key-auth5.com",
+                ["Content-Type"] = type,
+              },
+              body    = {
+                non_apikey = "kong",
+              }
+            })
+            assert.res_status(200, res)
+          end)
+          it("authenticates valid credentials in header", function()
+            local res = assert(proxy_client:send {
+              path    = "/request?apikey=kong",
+              headers = {
+                ["Host"]         = "key-auth5.com",
+                ["Content-Type"] = type,
+                ["apikey"]       = "kong",
+              },
+              body    = {
+                non_apikey = "kong",
               }
             })
             assert.res_status(200, res)
@@ -404,6 +446,27 @@ for _, strategy in helpers.each_strategy() do
       end)
     end)
 
+    describe("key in gRPC headers", function()
+      it("rejects call without credentials", function()
+        local ok, err = helpers.proxy_client_grpc(){
+          service = "hello.HelloService.SayHello",
+          opts = {},
+        }
+        assert.falsy(ok)
+        assert.matches("Code: Unauthenticated", err)
+      end)
+      it("accepts authorized calls", function()
+        local ok, res = helpers.proxy_client_grpc(){
+          service = "hello.HelloService.SayHello",
+          opts = {
+            ["-H"] = "'apikey: kong'",
+          },
+        }
+        assert.truthy(ok)
+        assert.same({ reply = "hello noname" }, cjson.decode(res))
+      end)
+    end)
+
     describe("underscores or hyphens in key headers", function()
       it("authenticates valid credentials", function()
         local res = assert(proxy_client:send {
@@ -467,6 +530,8 @@ for _, strategy in helpers.each_strategy() do
         local json = cjson.decode(body)
         assert.is_string(json.headers["x-consumer-id"])
         assert.equal("bob", json.headers["x-consumer-username"])
+        assert.equal(kong_cred.id, json.headers["x-credential-identifier"])
+        assert.equal(nil, json.headers["x-credential-username"])
         assert.is_nil(json.headers["x-anonymous-consumer"])
       end)
     end)
@@ -576,9 +641,9 @@ for _, strategy in helpers.each_strategy() do
           body = "foobar",
         })
 
-        local body = assert.res_status(400, res)
+        local body = assert.res_status(401, res)
         local json = cjson.decode(body)
-        assert.same({ message = "Cannot process request body" }, json)
+        assert.same({ message = "No API key found in request" }, json)
       end)
     end)
 
@@ -593,6 +658,8 @@ for _, strategy in helpers.each_strategy() do
         })
         local body = cjson.decode(assert.res_status(200, res))
         assert.equal('bob', body.headers["x-consumer-username"])
+        assert.equal(kong_cred.id, body.headers["x-credential-identifier"])
+        assert.equal(nil, body.headers["x-credential-username"])
         assert.is_nil(body.headers["x-anonymous-consumer"])
       end)
       it("works with wrong credentials and anonymous", function()
@@ -605,6 +672,8 @@ for _, strategy in helpers.each_strategy() do
         })
         local body = cjson.decode(assert.res_status(200, res))
         assert.equal('true', body.headers["x-anonymous-consumer"])
+        assert.equal(nil, body.headers["x-credential-identifier"])
+        assert.equal(nil, body.headers["x-credential-username"])
         assert.equal('no-body', body.headers["x-consumer-username"])
       end)
       it("works with wrong credentials and username as anonymous", function()

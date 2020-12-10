@@ -34,9 +34,26 @@ for _, strategy in helpers.each_strategy() do
         hosts = { "hmacauth.com" },
       }
 
+      local route_grpc = assert(bp.routes:insert {
+        protocols = { "grpc" },
+        paths = { "/hello.HelloService/" },
+        service = assert(bp.services:insert {
+          name = "grpc",
+          url = "grpc://localhost:15002",
+        }),
+      })
+
       bp.plugins:insert {
         name     = "hmac-auth",
         route = { id = route1.id },
+        config   = {
+          clock_skew = 3000
+        }
+      }
+
+      bp.plugins:insert {
+        name     = "hmac-auth",
+        route = { id = route_grpc.id },
         config   = {
           clock_skew = 3000
         }
@@ -171,6 +188,15 @@ for _, strategy in helpers.each_strategy() do
         local body = assert.res_status(401, res)
         body = cjson.decode(body)
         assert.equal("Unauthorized", body.message)
+      end)
+
+      it("rejects gRPC call without credentials", function()
+        local ok, err = helpers.proxy_client_grpc(){
+          service = "hello.HelloService.SayHello",
+          opts = {},
+        }
+        assert.falsy(ok)
+        assert.matches("Code: Unauthenticated", err)
       end)
 
       it("should not be authorized when the HMAC signature is wrong", function()
@@ -337,6 +363,22 @@ for _, strategy in helpers.each_strategy() do
         local body = assert.res_status(200, res)
         body = cjson.decode(body)
         assert.equal(hmacAuth, body.headers["authorization"])
+      end)
+
+      it("accepts authorized gRPC calls", function()
+        local date = os.date("!%a, %d %b %Y %H:%M:%S GMT")
+        local encodedSignature   = ngx.encode_base64(hmac_sha1_binary("secret", "date: " .. date))
+        local hmacAuth = [[hmac username="bob",algorithm="hmac-sha1",]]
+          .. [[headers="date",signature="]] .. encodedSignature .. [["]]
+
+        local ok, res = helpers.proxy_client_grpc(){
+          service = "hello.HelloService.SayHello",
+          opts = {
+            [""] = ("-H 'Date: %s' -H 'Authorization: %s'"):format(date, hmacAuth),
+          },
+        }
+        assert.truthy(ok)
+        assert.same({ reply = "hello noname" }, cjson.decode(res))
       end)
 
       it("should pass with GET and proxy-authorization", function()
@@ -736,6 +778,7 @@ for _, strategy in helpers.each_strategy() do
         local parsed_body = cjson.decode(body)
         assert.equal(consumer.id, parsed_body.headers["x-consumer-id"])
         assert.equal(consumer.username, parsed_body.headers["x-consumer-username"])
+        assert.equal(credential.username, parsed_body.headers["x-credential-identifier"])
         assert.equal(credential.username, parsed_body.headers["x-credential-username"])
         assert.is_nil(parsed_body.headers["x-anonymous-consumer"])
       end)
@@ -922,6 +965,8 @@ for _, strategy in helpers.each_strategy() do
         body = cjson.decode(body)
         assert.equal(hmacAuth, body.headers["authorization"])
         assert.equal("bob", body.headers["x-consumer-username"])
+        assert.equal(credential.username, body.headers["x-credential-identifier"])
+        assert.equal(credential.username, body.headers["x-credential-username"])
         assert.is_nil(body.headers["x-anonymous-consumer"])
       end)
 
@@ -1005,6 +1050,9 @@ for _, strategy in helpers.each_strategy() do
         body = cjson.decode(body)
         assert.equal("true", body.headers["x-anonymous-consumer"])
         assert.equal('no-body', body.headers["x-consumer-username"])
+        assert.equal(nil, body.headers["x-credential-identifier"])
+        assert.equal(nil, body.headers["x-credential-username"])
+
       end)
 
       it("should pass with invalid credentials and username in anonymous", function()

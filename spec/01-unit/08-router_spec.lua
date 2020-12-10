@@ -2498,7 +2498,7 @@ describe("Router", function()
       assert.equal("/endel%C3%B8st", match_t.upstream_uri)
     end)
 
-    describe("stripped paths", function()
+    describe("stripped paths #strip", function()
       local router
       local use_case_routes = {
         {
@@ -2516,6 +2516,7 @@ describe("Router", function()
             id         = uuid(),
             methods    = { "POST" },
             paths      = { "/my-route", "/this-route" },
+            strip_path = false,
           },
         },
       }
@@ -2530,6 +2531,7 @@ describe("Router", function()
         router._set_ngx(_ngx)
         local match_t = router.exec()
         assert.same(use_case_routes[1].route, match_t.route)
+        assert.equal("/my-route", match_t.prefix)
         assert.equal("/hello/world", match_t.upstream_uri)
       end)
 
@@ -2538,6 +2540,7 @@ describe("Router", function()
         router._set_ngx(_ngx)
         local match_t = router.exec()
         assert.same(use_case_routes[1].route, match_t.route)
+        assert.equal("/my-route", match_t.prefix)
         assert.equal("/", match_t.upstream_uri)
       end)
 
@@ -2547,6 +2550,7 @@ describe("Router", function()
         router._set_ngx(_ngx)
         local match_t = router.exec()
         assert.same(use_case_routes[2].route, match_t.route)
+        assert.is_nil(match_t.prefix)
         assert.equal("/my-route/hello/world", match_t.upstream_uri)
       end)
 
@@ -2568,6 +2572,7 @@ describe("Router", function()
         router._set_ngx(_ngx)
         local match_t = router.exec()
         assert.same(use_case_routes[1].route, match_t.route)
+        assert.equal("/", match_t.prefix)
         assert.equal("/my-route/hello/world", match_t.upstream_uri)
       end)
 
@@ -2576,12 +2581,14 @@ describe("Router", function()
         router._set_ngx(_ngx)
         local match_t = router.exec()
         assert.same(use_case_routes[1].route, match_t.route)
+        assert.equal("/my-route", match_t.prefix)
         assert.equal("/", match_t.upstream_uri)
 
         _ngx = mock_ngx("GET", "/my-route", { host = "domain.org" })
         router._set_ngx(_ngx)
         match_t = router.exec()
         assert.same(use_case_routes[1].route, match_t.route)
+        assert.equal("/my-route", match_t.prefix)
         assert.equal("/", match_t.upstream_uri)
       end)
 
@@ -2590,24 +2597,28 @@ describe("Router", function()
         router._set_ngx(_ngx)
         local match_t = router.exec()
         assert.same(use_case_routes[1].route, match_t.route)
+        assert.equal("/my-route", match_t.prefix)
         assert.equal("/", match_t.upstream_uri)
 
         _ngx = mock_ngx("GET", "/this-route", { host = "domain.org" })
         router._set_ngx(_ngx)
         match_t = router.exec()
         assert.same(use_case_routes[1].route, match_t.route)
+        assert.equal("/this-route", match_t.prefix)
         assert.equal("/", match_t.upstream_uri)
 
         _ngx = mock_ngx("GET", "/my-route", { host = "domain.org" })
         router._set_ngx(_ngx)
         match_t = router.exec()
         assert.same(use_case_routes[1].route, match_t.route)
+        assert.equal("/my-route", match_t.prefix)
         assert.equal("/", match_t.upstream_uri)
 
         _ngx = mock_ngx("GET", "/this-route", { host = "domain.org" })
         router._set_ngx(_ngx)
         match_t = router.exec()
         assert.same(use_case_routes[1].route, match_t.route)
+        assert.equal("/this-route", match_t.prefix)
         assert.equal("/", match_t.upstream_uri)
       end)
 
@@ -2627,6 +2638,7 @@ describe("Router", function()
         router._set_ngx(_ngx)
         local match_t = router.exec()
         assert.same(use_case_routes[1].route, match_t.route)
+        assert.equal("/endel%C3%B8st", match_t.prefix)
         assert.equal("/", match_t.upstream_uri)
       end)
 
@@ -2646,6 +2658,7 @@ describe("Router", function()
                               { host = "domain.org" })
         router._set_ngx(_ngx)
         local match_t = router.exec()
+        assert.equal("/users/123/profile", match_t.prefix)
         assert.equal("/hello/world", match_t.upstream_uri)
       end)
 
@@ -2665,6 +2678,7 @@ describe("Router", function()
                               { host = "domain.org" })
         router._set_ngx(_ngx)
         local match_t = router.exec()
+        assert.equal("/users/123/profile", match_t.prefix)
         assert.equal("/hello/world", match_t.upstream_uri)
       end)
     end)
@@ -3291,15 +3305,74 @@ describe("Router", function()
             snis = { "www.example.org" }
           }
         },
+        -- see #6425
+        {
+          service = service,
+          route   = {
+            hosts = {
+              "sni.example.com",
+            },
+            protocols = {
+              "http", "https",
+            },
+            snis = {
+              "sni.example.com",
+            },
+          },
+        },
+        {
+          service = service,
+          route   = {
+            hosts = {
+              "sni.example.com",
+            },
+            protocols = {
+              "http",
+            },
+          },
+        },
+      }
+
+      local use_case_ignore_sni = {
+        -- see #6425
+        {
+          service = service,
+          route   = {
+            hosts = {
+              "sni.example.com",
+            },
+            protocols = {
+              "http", "https",
+            },
+            snis = {
+              "sni.example.com",
+            },
+          },
+        },
       }
 
       local router = assert(Router.new(use_case))
+      local router_ignore_sni = assert(Router.new(use_case_ignore_sni))
 
       it("[sni]", function()
         local match_t = router.select(nil, nil, nil, "tcp", nil, nil, nil, nil,
                                       "www.example.org")
         assert.truthy(match_t)
         assert.same(use_case[1].route, match_t.route)
+      end)
+
+      it("[sni] is ignored for http request without shadowing routes with `protocols={'http'}`. Fixes #6425", function()
+        local match_t = router_ignore_sni.select(nil, nil, "sni.example.com",
+                                                 "http", nil, nil, nil, nil,
+                                                 nil)
+        assert.truthy(match_t)
+        assert.same(use_case_ignore_sni[1].route, match_t.route)
+
+        match_t = router.select(nil, nil, "sni.example.com",
+                                "http", nil, nil, nil, nil,
+                                nil)
+        assert.truthy(match_t)
+        assert.same(use_case[3].route, match_t.route)
       end)
     end)
 

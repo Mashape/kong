@@ -1,4 +1,5 @@
 local utils = require "kong.tools.utils"
+local pl_path = require "pl.path"
 
 describe("Utils", function()
 
@@ -22,6 +23,40 @@ describe("Utils", function()
         utils.get_system_infos(),
         utils.get_system_infos()
       )
+    end)
+  end)
+
+  describe("get_system_trusted_certs_filepath()", function()
+    local old_exists = pl_path.exists
+    after_each(function()
+      pl_path.exists = old_exists
+    end)
+    local tests = {
+      Debian = "/etc/ssl/certs/ca-certificates.crt",
+      Fedora = "/etc/pki/tls/certs/ca-bundle.crt",
+      OpenSuse = "/etc/ssl/ca-bundle.pem",
+      OpenElec = "/etc/pki/tls/cacert.pem",
+      CentOS = "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+      Alpine = "/etc/ssl/cert.pem",
+    }
+
+    for distro, test_path in pairs(tests) do
+      it("retrieves the default filepath in " .. distro, function()
+        pl_path.exists = function(path)
+          return path == test_path
+        end
+        assert.same(test_path, utils.get_system_trusted_certs_filepath())
+      end)
+    end
+
+    it("errors if file is somewhere else", function()
+      pl_path.exists = function(path)
+        return path == "/some/unknown/location.crt"
+      end
+
+      local ok, err = utils.get_system_trusted_certs_filepath()
+      assert.is_nil(ok)
+      assert.matches("Could not find trusted certs file", err)
     end)
   end)
 
@@ -674,6 +709,80 @@ describe("Utils", function()
       assert.has_error(function()
         utils.bytes_to_str(1234, "k", "")
       end, "scale must be equal or greater than 0")
+    end)
+  end)
+
+  describe("gzip_[de_in]flate()", function()
+    it("empty string", function()
+      local gz = assert(utils.deflate_gzip(""))
+      assert.equal(utils.inflate_gzip(gz), "")
+    end)
+
+    it("small string (< 1 buffer)", function()
+      local gz = assert(utils.deflate_gzip("aabbccddeeffgg"))
+      assert.equal(utils.inflate_gzip(gz), "aabbccddeeffgg")
+    end)
+
+    it("long string (> 1 buffer)", function()
+      local s = string.rep("a", 70000) -- > 64KB
+
+      local gz = assert(utils.deflate_gzip(s))
+
+      assert(#gz < #s)
+
+      assert.equal(utils.inflate_gzip(gz), s)
+    end)
+
+    it("bad gzipped data", function()
+      local res, err = utils.inflate_gzip("bad")
+      assert.is_nil(res)
+      assert.equal(err, "INFLATE: data error")
+    end)
+  end)
+
+  describe("get_mime_type()", function()
+    it("with valid mime types", function()
+      assert.equal("application/json; charset=utf-8", utils.get_mime_type("application/json"))
+      assert.equal("application/json; charset=utf-8", utils.get_mime_type("application/json; charset=utf-8"))
+      assert.equal("application/json; charset=utf-8", utils.get_mime_type("application/*"))
+      assert.equal("application/json; charset=utf-8", utils.get_mime_type("application/*; charset=utf-8"))
+      assert.equal("text/html; charset=utf-8", utils.get_mime_type("text/html"))
+      assert.equal("text/plain; charset=utf-8", utils.get_mime_type("text/plain"))
+      assert.equal("text/plain; charset=utf-8", utils.get_mime_type("text/*"))
+      assert.equal("text/plain; charset=utf-8", utils.get_mime_type("text/*; charset=utf-8"))
+      assert.equal("application/xml; charset=utf-8", utils.get_mime_type("application/xml"))
+      assert.equal("application/json; charset=utf-8", utils.get_mime_type("*/*; charset=utf-8"))
+      assert.equal("application/json; charset=utf-8", utils.get_mime_type("*/*"))
+      assert.equal("", utils.get_mime_type("application/grpc"))
+    end)
+
+    it("with unsupported or invalid mime types", function()
+      assert.equal("application/json; charset=utf-8", utils.get_mime_type("audio/*", true))
+      assert.equal("application/json; charset=utf-8", utils.get_mime_type("text/css"))
+      assert.equal("application/json; charset=utf-8", utils.get_mime_type("default"))
+      assert.is_nil(utils.get_mime_type("video/json", false))
+      assert.is_nil(utils.get_mime_type("text/javascript", false))
+    end)
+  end)
+
+  describe("nginx_conf_time_to_seconds()", function()
+    it("returns value in seconds", function()
+      assert.equal(5, utils.nginx_conf_time_to_seconds("5"))
+      assert.equal(5, utils.nginx_conf_time_to_seconds("5s"))
+      assert.equal(60, utils.nginx_conf_time_to_seconds("60s"))
+      assert.equal(60, utils.nginx_conf_time_to_seconds("1m"))
+      assert.equal(120, utils.nginx_conf_time_to_seconds("2m"))
+      assert.equal(7200, utils.nginx_conf_time_to_seconds("2h"))
+      assert.equal(172800, utils.nginx_conf_time_to_seconds("2d"))
+      assert.equal(1209600, utils.nginx_conf_time_to_seconds("2w"))
+      assert.equal(5184000, utils.nginx_conf_time_to_seconds("2M"))
+      assert.equal(63072000, utils.nginx_conf_time_to_seconds("2y"))
+    end)
+
+    it("throws an error on bad argument", function()
+      assert.has_error(function()
+        utils.nginx_conf_time_to_seconds("abcd")
+      end, "bad argument #1 'str'")
     end)
   end)
 end)

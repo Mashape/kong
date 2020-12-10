@@ -141,6 +141,14 @@ function Plugins:check_db_against_config(plugin_set)
   return true
 end
 
+local function implements(plugin, method)
+  if type(plugin) ~= "table" then
+    return false
+  end
+
+  local m = plugin[method]
+  return type(m) == "function" and m ~= BasePlugin[method]
+end
 
 local function load_plugin_handler(plugin)
   -- NOTE: no version _G.kong (nor PDK) in plugins main chunk
@@ -155,6 +163,14 @@ local function load_plugin_handler(plugin)
   end
   if not ok then
     return nil, plugin .. " plugin is enabled but not installed;\n" .. handler
+  end
+
+  if implements(handler, "response") and
+      (implements(handler, "header_filter") or implements(handler, "body_filter"))
+  then
+    return nil, fmt(
+      "Plugin %q can't be loaded because it implements both `response` " ..
+      "and `header_filter` or `body_filter` methods.\n", plugin)
   end
 
   return handler
@@ -234,14 +250,18 @@ local function load_plugin(self, plugin)
     return nil, err
   end
 
-  if schema.fields.consumer and schema.fields.consumer.eq == null then
-    plugin.no_consumer = true
-  end
-  if schema.fields.route and schema.fields.route.eq == null then
-    plugin.no_route = true
-  end
-  if schema.fields.service and schema.fields.service.eq == null then
-    plugin.no_service = true
+  for _, field in ipairs(schema.fields) do
+    if field.consumer and field.consumer.eq == null then
+      handler.no_consumer = true
+    end
+
+    if field.route and field.route.eq == null then
+      handler.no_route = true
+    end
+
+    if field.service and field.service.eq == null then
+      handler.no_service = true
+    end
   end
 
   ngx_log(ngx_DEBUG, "Loading plugin: ", plugin)
@@ -323,6 +343,41 @@ function Plugins:get_handlers()
   table.sort(list, sort_by_handler_priority)
 
   return list
+end
+
+
+function Plugins:select_by_cache_key(key)
+
+  -- first try new way
+  local entity, new_err = self.super.select_by_cache_key(self, key)
+
+  if not new_err then -- the step above didn't fail
+    -- we still need to check whether the migration is done,
+    -- because the new table may be only partially full
+    local schema_state = assert(self.db:schema_state())
+
+    -- if migration is complete, disable this translator function and return
+    if schema_state:is_migration_executed("core", "009_200_to_210") then
+      Plugins.select_by_cache_key = self.super.select_by_cache_key
+      return entity
+    end
+  end
+
+  key = key:sub(1, -38) -- strip ":<ws_id>" from the end
+
+  -- otherwise, we either have not started migrating, or we're migrating but
+  -- the plugin identified by key doesn't have a cache_key yet
+  -- do things "the old way" in both cases
+  local row, old_err = self.super.select_by_cache_key(self, key)
+  if row then
+    return self:row_to_entity(row)
+  end
+
+  -- when both ways have failed, return the "new" error message.
+  -- otherwise, only return an error if the "old" version failed.
+  local err = (new_err and old_err) and new_err or old_err
+
+  return nil, err
 end
 
 

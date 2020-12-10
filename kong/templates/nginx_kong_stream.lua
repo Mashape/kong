@@ -11,8 +11,8 @@ lua_socket_log_errors  off;
 lua_max_running_timers 4096;
 lua_max_pending_timers 16384;
 lua_ssl_verify_depth   ${{LUA_SSL_VERIFY_DEPTH}};
-> if lua_ssl_trusted_certificate then
-lua_ssl_trusted_certificate '${{LUA_SSL_TRUSTED_CERTIFICATE}}';
+> if lua_ssl_trusted_certificate_combined then
+lua_ssl_trusted_certificate '${{LUA_SSL_TRUSTED_CERTIFICATE_COMBINED}}';
 > end
 
 lua_shared_dict stream_kong                        5m;
@@ -32,7 +32,7 @@ lua_shared_dict stream_kong_db_cache_2             ${{MEM_CACHE_SIZE}};
 lua_shared_dict stream_kong_db_cache_miss_2        12m;
 > end
 > if database == "cassandra" then
-lua_shared_dict  stream_kong_cassandra             5m;
+lua_shared_dict stream_kong_cassandra              5m;
 > end
 
 > if ssl_ciphers then
@@ -79,11 +79,15 @@ server {
     listen $(entry.listener);
 > end
 
+> if proxy_access_log == "off" then
+    access_log off;
+> else
     access_log ${{PROXY_ACCESS_LOG}} basic;
+> end
     error_log  ${{PROXY_ERROR_LOG}} ${{LOG_LEVEL}};
 
-> for i = 1, #trusted_ips do
-    set_real_ip_from $(trusted_ips[i]);
+> for _, ip in ipairs(trusted_ips) do
+    set_real_ip_from $(ip);
 > end
 
     # injected nginx_sproxy_* directives
