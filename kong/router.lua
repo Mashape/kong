@@ -397,7 +397,7 @@ local function marshall_route(r)
           header_values_map[lower(header_value)] = true
           header_values_count = header_values_count + 1
         end
-        if header_values_count == 1 and header_values[1]:find("~\\*") == 1 then
+        if header_values_count == 1 and header_values[1]:sub(1,2) == "~*" then
           header_pattern = header_values[1]:sub(3)
         end
 
