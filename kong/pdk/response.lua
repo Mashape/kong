@@ -25,6 +25,8 @@ local find = string.find
 local lower = string.lower
 local error = error
 local pairs = pairs
+local ipairs = ipairs
+local tonumber = tonumber
 local coroutine = coroutine
 local normalize_header = checks.normalize_header
 local normalize_multi_header = checks.normalize_multi_header
@@ -693,6 +695,33 @@ local function new(self, major_version)
     return send(response.status_code, response.content, response.headers)
   end
 
+
+  local function send_stream(status, body, headers)
+    if body then
+      if status < 400 then
+        -- only sends body to the client for 200 status code
+        local res, err = ngx.print(body)
+        if not res then
+          error("unable to send body to client: " .. err, 2)
+        end
+
+      else
+        self.log.err("unable to proxy stream connection, " ..
+                       "status: " .. status .. ", err: ", body)
+      end
+    end
+
+    return ngx.exit(status)
+  end
+
+
+  local function flush_stream(ctx)
+    ctx = ctx or ngx.ctx
+    local response = ctx.delayed_response
+    return send_stream(response.status_code, response.content, response.headers)
+  end
+
+
   if ngx and ngx.config.subsystem == 'http' then
     ---
     -- This function interrupts the current processing and produces a response.
@@ -861,21 +890,23 @@ local function new(self, major_version)
         error("body must be a nil or a string", 2)
       end
 
-      if body then
-        if status < 400 then
-          -- only sends body to the client for 200 status code
-          local res, err = ngx.print(body)
-          if not res then
-            error("unable to send body to client: " .. err, 2)
-          end
+      local ctx = ngx.ctx
+      ctx.KONG_EXITED = true
 
-        else
-          self.log.err("unable to proxy stream connection, " ..
-                       "status: " .. status .. ", err: ", body)
-        end
+      if ctx.delay_response and not ctx.delayed_response then
+        ngx.log(ngx.ERR, "STREAM DELAYED")
+        ctx.delayed_response = {
+          status_code = status,
+          content     = body,
+          headers     = headers,
+        }
+
+        ctx.delayed_response_callback = flush_stream
+        coroutine.yield()
+
+      else
+        return send_stream(status, body, headers)
       end
-
-      return ngx.exit(status)
     end
   end
 
@@ -982,7 +1013,7 @@ local function new(self, major_version)
     end
 
     if message ~= nil and type(message) ~= "string" then
-        error("message must be a nil or a string", 2)
+      error("message must be a nil or a string", 2)
     end
 
     if headers ~= nil and type(headers) ~= "table" then

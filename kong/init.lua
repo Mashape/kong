@@ -246,14 +246,18 @@ local function execute_plugins_iterator(plugins_iterator, phase, ctx)
 
   if ctx then
     old_ws = ctx.workspace
-    delay_response = phase == "access" or nil
+    delay_response = phase == "access" or phase == "preread" or nil
     ctx.delay_response = delay_response
   end
 
   for plugin, configuration in plugins_iterator:iterate(phase, ctx) do
     if ctx then
-      if plugin.handler._go then
+      if not ctx.ran_go_plugin and plugin.handler._go then
         ctx.ran_go_plugin = true
+      end
+
+      if delay_response and ctx.delayed_response then
+        goto continue
       end
 
       kong_global.set_named_ctx(kong, "plugin", plugin.handler)
@@ -264,8 +268,8 @@ local function execute_plugins_iterator(plugins_iterator, phase, ctx)
     if not delay_response then
       plugin.handler[phase](plugin.handler, configuration)
 
-    elseif not ctx.delayed_response then
-      local co = coroutine.create(plugin.handler.access)
+    else
+      local co = coroutine.create(plugin.handler[phase])
       local cok, cerr = coroutine.resume(co, plugin.handler, configuration)
       if not cok then
         kong.log.err(cerr)
@@ -281,6 +285,8 @@ local function execute_plugins_iterator(plugins_iterator, phase, ctx)
     if old_ws then
       ctx.workspace = old_ws
     end
+
+    ::continue::
   end
 end
 
@@ -665,6 +671,16 @@ function Kong.preread()
 
   local plugins_iterator = runloop.get_updated_plugins_iterator()
   execute_plugins_iterator(plugins_iterator, "preread", ctx)
+
+  if ctx.delayed_response then
+    ctx.KONG_PREREAD_ENDED_AT = get_now_ms()
+    ctx.KONG_PREREAD_TIME = ctx.KONG_PREREAD_ENDED_AT - ctx.KONG_PREREAD_START
+    ctx.KONG_RESPONSE_LATENCY = ctx.KONG_PREREAD_ENDED_AT - ctx.KONG_PROCESSING_START
+
+    return flush_delayed_response(ctx)
+  end
+
+  ctx.delay_response = nil
 
   if not ctx.service then
     ctx.KONG_PREREAD_ENDED_AT = get_now_ms()
