@@ -1113,11 +1113,6 @@ return {
     before = function(ctx)
       local server_port = var.server_port
       ctx.host_port = HOST_PORTS[server_port] or server_port
-
-      -- special handling for proxy-authorization and te headers in case
-      -- the plugin(s) want to specify them (store the original)
-      ctx.http_proxy_authorization = var.http_proxy_authorization
-      ctx.http_te                  = var.http_te
     end,
     after = NOOP,
   },
@@ -1141,7 +1136,7 @@ return {
       ctx.workspace = match_t.route and match_t.route.ws_id
 
       local http_version   = ngx.req.http_version()
-      local scheme         = var.scheme
+      local scheme         = ctx.req_scheme
       local host           = var.host
       local port           = tonumber(ctx.host_port, 10)
                           or tonumber(var.server_port, 10)
@@ -1167,13 +1162,14 @@ return {
       -- contains the IP that was originally in $remote_addr before realip
       -- module overrode that (aka the client that connected us).
 
+      local req_headers = ctx.req_headers
       local trusted_ip = kong.ip.is_trusted(realip_remote_addr)
       if trusted_ip then
-        forwarded_proto  = var.http_x_forwarded_proto  or scheme
-        forwarded_host   = var.http_x_forwarded_host   or host
-        forwarded_port   = var.http_x_forwarded_port   or port
-        forwarded_path   = var.http_x_forwarded_path
-        forwarded_prefix = var.http_x_forwarded_prefix
+        forwarded_proto  = req_headers["x-forwarded-proto"]  or scheme
+        forwarded_host   = req_headers["x-forwarded-host"]   or host
+        forwarded_port   = req_headers["x-forwarded-port"]   or port
+        forwarded_path   = req_headers["x-forwarded-path"]
+        forwarded_prefix = req_headers["x-forwarded-prefix"]
 
       else
         forwarded_proto  = scheme
@@ -1182,7 +1178,7 @@ return {
       end
 
       if not forwarded_path then
-        forwarded_path = var.request_uri
+        forwarded_path = ctx.req_uri
         local p = find(forwarded_path, "?", 2, true)
         if p then
           forwarded_path = sub(forwarded_path, 1, p - 1)
@@ -1260,7 +1256,7 @@ return {
       var.upstream_host   = match_t.upstream_host
 
       -- Keep-Alive and WebSocket Protocol Upgrade Headers
-      local upgrade = var.http_upgrade
+      local upgrade = req_headers["upgrade"]
       if upgrade and lower(upgrade) == "websocket" then
         var.upstream_connection = "keep-alive, Upgrade"
         var.upstream_upgrade    = "websocket"
@@ -1270,7 +1266,7 @@ return {
       end
 
       -- X-Forwarded-* Headers
-      local http_x_forwarded_for = var.http_x_forwarded_for
+      local http_x_forwarded_for = req_headers["x-forwarded-for"]
       if http_x_forwarded_for then
         var.upstream_x_forwarded_for = http_x_forwarded_for .. ", " ..
                                        realip_remote_addr
@@ -1288,7 +1284,7 @@ return {
       -- At this point, the router and `balancer_setup_stage1` have been
       -- executed; detect requests that need to be redirected from `proxy_pass`
       -- to `grpc_pass`. After redirection, this function will return early
-      if service and var.kong_proxy_mode == "http" then
+      if service and (ctx.kong_proxy_mode or var.kong_proxy_mode) == "http" then
         if service.protocol == "grpc" or service.protocol == "grpcs" then
           return ngx.exec("@grpc")
         end
@@ -1331,7 +1327,8 @@ return {
       --
       -- We can't rely on var.upstream_host for balancer retries inside
       -- `set_host_header` because it would never be empty after the first -- balancer try
-      if var.upstream_host ~= nil and var.upstream_host ~= "" then
+      local upstream_host = var.upstream_host
+      if upstream_host ~= nil and upstream_host ~= "" then
         balancer_data.preserve_host = true
       end
 
@@ -1341,19 +1338,20 @@ return {
         return kong.response.exit(errcode, body)
       end
 
-      var.upstream_scheme = balancer_data.scheme
+      local upstream_scheme = balancer_data.scheme
+      var.upstream_scheme = upstream_scheme
 
-      local ok, err = balancer.set_host_header(balancer_data)
-      if not ok then
-        ngx.log(ngx.ERR, "failed to set balancer Host header: ", err)
+      if not balancer_data.preserve_host then
+        upstream_host, err = balancer.set_host_header(balancer_data)
+        if err then
+          ngx.log(ngx.ERR, "failed to set balancer Host header: ", err)
 
-        return ngx.exit(500)
+          return ngx.exit(500)
+        end
       end
 
       -- the nginx grpc module does not offer a way to overrride the
       -- :authority pseudo-header; use our internal API to do so
-      local upstream_host = var.upstream_host
-      local upstream_scheme = var.upstream_scheme
 
       if upstream_scheme == "grpc" or upstream_scheme == "grpcs" then
         ok, err = kong.service.request.set_header(":authority", upstream_host)
@@ -1362,8 +1360,10 @@ return {
         end
       end
 
+      local req_headers = ctx.req_headers
+
       -- clear hop-by-hop request headers:
-      for _, header_name in csv(var.http_connection) do
+      for _, header_name in csv(req_headers["connection"]) do
         -- some of these are already handled by the proxy module,
         -- proxy-authorization and upgrade being an exception that
         -- is handled below with special semantics.
@@ -1378,26 +1378,26 @@ return {
       end
 
       -- add te header only when client requests trailers (proxy removes it)
-      for _, header_name in csv(var.http_te) do
+      for _, header_name in csv(req_headers["te"]) do
         if header_name == "trailers" then
           var.upstream_te = "trailers"
           break
         end
       end
 
-      if var.http_proxy then
+      if req_headers["proxy"] then
         clear_header("Proxy")
       end
 
-      if var.http_proxy_connection then
+      if req_headers["proxy-connection"] then
         clear_header("Proxy-Connection")
       end
 
       -- clear the proxy-authorization header only in case the plugin didn't
       -- specify it, assuming that the plugin didn't specify the same value.
-      local proxy_authorization = var.http_proxy_authorization
+      local proxy_authorization = req_headers["proxy-authorization"]
       if proxy_authorization and
-         proxy_authorization == var.http_proxy_authorization then
+         proxy_authorization == req_headers["proxy-authorization"] then
         clear_header("Proxy-Authorization")
       end
     end

@@ -731,7 +731,9 @@ end
 
 
 function Kong.rewrite()
+  local ctx = ngx.ctx
   local proxy_mode = var.kong_proxy_mode
+  ctx.kong_proxy_mode = proxy_mode
   if proxy_mode == "grpc" or proxy_mode == "unbuffered"  then
     kong_resty_ctx.apply_ref()    -- if kong_proxy_mode is gRPC/unbuffered, this is executing
     local ctx = ngx.ctx           -- after an internal redirect. Restore (and restash)
@@ -743,7 +745,6 @@ function Kong.rewrite()
     return
   end
 
-  local ctx = ngx.ctx
   if not ctx.KONG_PROCESSING_START then
     ctx.KONG_PROCESSING_START = start_time() * 1000
   end
