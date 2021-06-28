@@ -1,5 +1,7 @@
 local utils = require "kong.tools.utils"
 local mocker = require "spec.fixtures.mocker"
+local we = require "resty.worker.events"
+
 
 local ws_id = utils.uuid()
 
@@ -112,6 +114,7 @@ for _, consistency in ipairs({"strict", "eventual"}) do
 
       local passive_hc = utils.deep_copy(hc_defaults)
       passive_hc.passive.healthy.successes = 1
+      passive_hc.passive.unhealthy.tcp_failures = 1 -- 1 = required because http failures is 1 as well
       passive_hc.passive.unhealthy.http_failures = 1
 
       UPSTREAMS_FIXTURES = {
@@ -469,6 +472,7 @@ for _, consistency in ipairs({"strict", "eventual"}) do
         }
         for _, t in ipairs(tests) do
           assert(balancer.post_health(upstream_ph, t.host, nil, t.port, t.health))
+          we.poll()
           local health_info = assert(balancer.get_upstream_health("ph"))
           local response = t.health and "HEALTHY" or "UNHEALTHY"
           assert.same(response,
@@ -506,12 +510,14 @@ for _, consistency in ipairs({"strict", "eventual"}) do
             port = 1111,
             host = {hostname = "localhost"},
           }}, 429)
+        we.poll()
         my_balancer.report_http_status({
           address = {
             ip = "127.0.0.1",
             port = 1111,
             host = {hostname = "localhost"},
           }}, 200)
+        we.poll()
         balancer.unsubscribe_from_healthcheck_events(cb)
         my_balancer.report_http_status({
           address = {
