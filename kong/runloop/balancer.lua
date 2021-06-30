@@ -30,7 +30,6 @@ local assert = assert
 local table = table
 local table_concat = table.concat
 local table_remove = table.remove
-local timer_at = ngx.timer.at
 local run_hook = hooks.run_hook
 local var = ngx.var
 local get_phase = ngx.get_phase
@@ -871,13 +870,6 @@ local function update_balancer_state(premature)
     -- if no err, remove the upstream event from the queue
     table_remove(upstream_events_queue, 1)
   end
-
-  local frequency = kong.configuration.worker_state_update_frequency or 1
-  local _, err = timer_at(frequency, update_balancer_state)
-  if err then
-    log(CRIT, "unable to reschedule update proxy state timer: ", err)
-  end
-
 end
 
 
@@ -918,7 +910,7 @@ local function init()
   end
 
   local frequency = kong.configuration.worker_state_update_frequency or 1
-  local _, err = timer_at(frequency, update_balancer_state)
+  local _, err = kong.async:every(frequency, update_balancer_state)
   if err then
     log(CRIT, "unable to start update proxy state timer: ", err)
   else

@@ -37,6 +37,10 @@ local function setup_it_block(consistency)
         worker_state_update_frequency = 0.1,
       },
       core_cache = mock_cache(cache_table),
+      async = {
+        run = function(...) end,
+        every = function(...) end,
+      },
     },
     ngx = {
       ctx = {
