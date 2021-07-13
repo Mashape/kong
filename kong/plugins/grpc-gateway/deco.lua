@@ -15,6 +15,7 @@ local bunpack = string.unpack     -- luacheck: ignore string
 local ngx = ngx
 local re_gsub = ngx.re.gsub
 local re_match = ngx.re.match
+local re_gmatch = ngx.re.gmatch
 
 local encode_json = cjson.encode
 
@@ -199,6 +200,39 @@ local function unframe(body)
   return body:sub(pos, frame_end), body:sub(frame_end + 1)
 end
 
+--[[
+  // Set value `v` to table `t` at address stored in `key_stack`,
+  // Key stack is alternative to dot-syntax. For example:
+  // `a.b.c` is equivalent to `key_stack = { a, b, c }`.
+]]
+local function patch_table( t, key_stack, v )
+  local k = table.remove( key_stack, 1 ) -- pop out first key
+
+  if key_stack[1] == nil then --same as `if #key_stack == 0` but faster
+    t[k] = v
+  else 
+    if t[k] == nil then
+      t[k] = {}
+    end
+
+    patch_table( t[k], key_stack, v )
+  end
+end
+
+--[[
+  // Set value `v` at `path` in table `t`
+  // Path contains value address in dot-syntax. For example:
+  // `path="a.b.c"` would lead to `t[a][b][c] = v`.
+]]
+local function add_to_table( t, path, v )
+  local key_stack = {}
+
+  for captures in re_gmatch( path , "[^%.]+") do
+    table.insert( key_stack, captures[0] )
+  end
+
+  patch_table( t, key_stack, v )
+end
 
 function deco:upstream(body)
   --[[
@@ -244,7 +278,14 @@ function deco:upstream(body)
     local args, err = ngx.req.get_uri_args()
     if not err then
       for k, v in pairs(args) do
-        payload[k] = v
+        --[[
+          // According to [spec](https://github.com/googleapis/googleapis/blob/master/google/api/http.proto#L113) 
+          // non-repeated message fields are supported. 
+          //
+          // For example: `GET /v1/messages/123456?revision=2&sub.subfield=foo`
+          // translates into `payload = { sub = { subfield = "foo" }}`
+        ]]--
+        add_to_table( payload, k, v )
       end
     end
   end
