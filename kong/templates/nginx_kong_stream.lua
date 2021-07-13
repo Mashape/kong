@@ -118,6 +118,8 @@ server {
         Kong.preread()
     }
 
+    ssl_preread on;
+
     proxy_ssl on;
     proxy_ssl_server_name on;
 > if client_ssl then

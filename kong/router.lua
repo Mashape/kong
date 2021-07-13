@@ -1894,6 +1894,10 @@ function _M.new(routes)
                     or tonumber(var.server_port, 10)
       -- error value for non-TLS connections ignored intentionally
       local sni, _ = server_name()
+      -- fallback to preread SNI if current connection doesn't terminate TLS
+      if not sni then
+        sni = var.ssl_preread_server_name
+      end
 
       local scheme
       if var.protocol == "UDP" then
