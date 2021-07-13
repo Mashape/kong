@@ -82,13 +82,13 @@ jobs:
         elif [[ $suite == "/perf" ]]; then
           suites="01-rps"
           if [[ -z $tags ]]; then
-            tags="baseline,single_route"
+            tags="baseline,balancer"
           fi
         else
           # if not specified by comment, run both
           suites="01-rps 02-flamegraph"
           if [[ -z $tags ]]; then
-            tags="baseline,single_route,simple"
+            tags="baseline,balancer,simple"
           fi
         fi
 
@@ -103,8 +103,12 @@ jobs:
         PERF_TEST_DRIVER: terraform
       run: |
         for suite in ${{ steps.choose_perf.outputs.suites }}; do
-          bin/busted -o gtest spec/04-perf/$suite/ \
-            -t "${{ steps.choose_perf.outputs.tags }}"
+          # Run each test individually, ngx.pipe doesn't like to be imported twice
+          # maybe bin/busted --no-auto-insulate
+          for f in $(find "spec/04-perf/$suite/" -type f); do
+            bin/busted -o gtest "$f" \
+              -t "${{ steps.choose_perf.outputs.tags }}"
+          done
         done
         
     - name: Teardown
