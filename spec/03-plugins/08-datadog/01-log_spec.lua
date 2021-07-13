@@ -103,6 +103,12 @@ for _, strategy in helpers.each_strategy() do
               sample_rate = 1,
               tags        = {"T2:V2:V3", "T4"},
             },
+            {
+              name        = "request_size",
+              stat_type   = "distribution",
+              sample_rate = 1,
+              tags        = {},
+            },
           },
         },
       }
@@ -240,7 +246,7 @@ for _, strategy in helpers.each_strategy() do
     end)
 
     it("logs metrics with tags", function()
-      local thread = helpers.udp_server(9999, 2)
+      local thread = helpers.udp_server(9999, 3)
 
       local res = assert(proxy_client:send {
         method  = "GET",
@@ -255,6 +261,7 @@ for _, strategy in helpers.each_strategy() do
       assert.True(ok)
       assert.contains("kong.request.count:1|c|#name:dd3,status:200,T2:V2,T3:V3,T4", gauges)
       assert.contains("kong.latency:%d+|g|#name:dd3,status:200,T2:V2:V3,T4", gauges, true)
+      assert.contains("kong.request.size:%d+|d|#name:dd3,status:200", gauges, true)
     end)
 
     it("should not return a runtime error (regression)", function()
