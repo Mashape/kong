@@ -1848,6 +1848,12 @@ function _M.new(routes)
         req_uri = normalize(req_uri, true)
       end
 
+      -- support rewrite
+      -- TODO  kong.request.get_path also need to fix
+      if string.find(ngx.escape_uri(req_uri), ngx.var.uri, 1, true) ~= 1 then
+        req_uri = ngx.var.uri
+      end
+
       local match_t = find_route(req_method, req_uri, req_host, req_scheme,
                                  nil, nil, -- src_ip, src_port
                                  nil, nil, -- dst_ip, dst_port
