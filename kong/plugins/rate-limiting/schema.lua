@@ -84,6 +84,9 @@ return {
           { redis_host = typedefs.host },
           { redis_port = typedefs.port({ default = 6379 }), },
           { redis_password = { type = "string", len_min = 0 }, },
+          { redis_ssl = { type = "boolean", default = false }, },
+          { redis_ssl_verify = { type = "boolean", default = false }, },
+          { redis_server_name = typedefs.sni },
           { redis_timeout = { type = "number", default = 2000, }, },
           { redis_database = { type = "integer", default = 0 }, },
           { hide_client_headers = { type = "boolean", required = true, default = false }, },
@@ -114,5 +117,6 @@ return {
       if_field = "config.policy", if_match = { eq = "redis" },
       then_field = "config.redis_timeout", then_match = { required = true },
     } },
+    { mutually_required = { "redis_ssl", "redis_ssl_verify", "redis_server_name" } },
   },
 }
