@@ -40,7 +40,7 @@ for _, strategy in helpers.each_strategy() do
 
       local routes = {}
 
-      for i = 1, 13 do
+      for i = 1, 15 do
         routes[i] = bp.routes:insert {
           hosts = { "jwt" .. i .. ".com" },
         }
@@ -146,6 +146,18 @@ for _, strategy in helpers.each_strategy() do
         name     = "jwt",
         route = { id = routes[13].id },
         config   = { anonymous = anonymous_user.username },
+      })
+
+      plugins:insert({
+        name     = "jwt",
+        route = { id = routes[14].id },
+        config   = { scopes_required = { "giveaccess"} },
+      })
+
+      plugins:insert({
+        name     = "jwt",
+        route = { id = routes[15].id },
+        config   = { scopes_required = { "giveaccess"}, claims_headers = { } },
       })
 
       plugins:insert({
@@ -826,6 +838,53 @@ for _, strategy in helpers.each_strategy() do
       end)
     end)
 
+    describe("JWT claims to header", function()
+      it ("contains X-JWT-Iss", function()
+        local payload = {
+          iss = jwt_secret.key,
+          sub = "jdoe",
+          scope = "giveaccess"
+        }
+        local jwt = jwt_encoder.encode(payload, jwt_secret.secret)
+        local authorization = "Bearer " .. jwt
+        local res = assert(proxy_client:send {
+          method  = "GET",
+          path    = "/request",
+          headers = {
+            ["Authorization"] = authorization,
+            ["Host"]          = "jwt14.com",
+          }
+        })
+
+        local body = cjson.decode(assert.res_status(200, res))
+        assert.equal(jwt_secret.key, body.headers["x-jwt-iss"])
+        assert.equal("jdoe", body.headers["x-jwt-sub"])
+        assert.is_nil(body.headers["x-validated-scope"])
+      end)
+
+      it ("no header is produce if claims_headers config if empty", function()
+        local payload = {
+          iss = jwt_secret.key,
+          sub = "jdoe",
+          scope = "giveaccess"
+        }
+        local jwt = jwt_encoder.encode(payload, jwt_secret.secret)
+        local authorization = "Bearer " .. jwt
+        local res = assert(proxy_client:send {
+          method  = "GET",
+          path    = "/request",
+          headers = {
+            ["Authorization"] = authorization,
+            ["Host"]          = "jwt15.com",
+          }
+        })
+        local body = cjson.decode(assert.res_status(200, res))
+        assert.is_nil(body.headers["x-validated-scope"])
+        assert.is_nil(body.headers["x-jwt-sub"])
+        assert.is_nil(body.headers["x-jwt-iss"])
+      end)
+    end)
+
     describe("JWT private claims checks", function()
       it("requires the checked fields to be in the claims", function()
         local payload = {
@@ -875,6 +934,85 @@ for _, strategy in helpers.each_strategy() do
         })
         local body = assert.res_status(401, res)
         assert.equal('{"nbf":"token not valid yet"}', body)
+      end)
+    end)
+
+    describe("JWT scope validation", function()
+      it("failed with invalid value in the scope claim", function()
+        local payload = {
+          iss = jwt_secret.key,
+          scope = "noaccess"
+        }
+        local jwt = jwt_encoder.encode(payload, jwt_secret.secret)
+        local res = assert(proxy_client:send {
+          method  = "GET",
+          path    = "/request/?jwt=" .. jwt,
+          headers = {
+            ["Host"] = "jwt14.com"
+          }
+        })
+        local body = assert.res_status(401, res)
+        assert.equal('{"message":"Invalid scope"}', body)
+      end)
+      it("passes with valid value in the scope claim", function()
+        local payload = {
+          iss = jwt_secret.key,
+          scope = "giveaccess"
+        }
+        local jwt = jwt_encoder.encode(payload, jwt_secret.secret)
+        local res = assert(proxy_client:send {
+          method  = "GET",
+          path    = "/request/?jwt=" .. jwt,
+          headers = {
+            ["Host"] = "jwt14.com"
+          }
+        })
+        assert.res_status(200, res)
+      end)
+      it("failed with invalid value in the array scope claim", function()
+        local payload = {
+          iss = jwt_secret.key,
+          scope = { "noaccess"}
+        }
+        local jwt = jwt_encoder.encode(payload, jwt_secret.secret)
+        local res = assert(proxy_client:send {
+          method  = "GET",
+          path    = "/request/?jwt=" .. jwt,
+          headers = {
+            ["Host"] = "jwt14.com"
+          }
+        })
+        local body = assert.res_status(401, res)
+        assert.equal('{"message":"Invalid scope"}', body)
+      end)
+      it("passes with valid value in the array scope claim", function()
+        local payload = {
+          iss = jwt_secret.key,
+          scope = {"noaccess", "giveaccess,another"}
+        }
+        local jwt = jwt_encoder.encode(payload, jwt_secret.secret)
+        local res = assert(proxy_client:send {
+          method  = "GET",
+          path    = "/request/?jwt=" .. jwt,
+          headers = {
+            ["Host"] = "jwt14.com"
+          }
+        })
+        assert.res_status(200, res)
+      end)
+      it("scope is required but not scope exists in JWT", function()
+        local payload = {
+          iss = jwt_secret.key
+        }
+        local jwt = jwt_encoder.encode(payload, jwt_secret.secret)
+        local res = assert(proxy_client:send {
+          method  = "GET",
+          path    = "/request/?jwt=" .. jwt,
+          headers = {
+            ["Host"] = "jwt14.com"
+          }
+        })
+        assert.res_status(401, res)
       end)
     end)
 

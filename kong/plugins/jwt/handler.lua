@@ -9,6 +9,8 @@ local error = error
 local ipairs = ipairs
 local tostring = tostring
 local re_gmatch = ngx.re.gmatch
+local match = string.match
+local noop = function() end
 
 
 local JwtHandler = {
@@ -123,6 +125,46 @@ local function set_consumer(consumer, credential, token)
   end
 end
 
+local function iter(config_array)
+  if type(config_array) ~= "table" then
+    return noop
+  end
+
+  return function(config_array, i)
+    i = i + 1
+
+    local header_to_test = config_array[i]
+    if header_to_test == nil then -- n + 1
+      return nil
+    end
+
+    local header_to_test_name, header_to_test_value = match(header_to_test, "^([^:]+):*(.-)$")
+    if header_to_test_value == "" then
+      header_to_test_value = nil
+    end
+
+    return i, header_to_test_name, header_to_test_value
+  end, config_array, 0
+end
+
+
+local function set_claims_headers(claims, claims_headers)
+  local set_header = kong.service.request.set_header
+  local clear_header = kong.service.request.clear_header
+
+  for _, claim_name, header_name in iter(claims_headers) do
+    local claim_value = claims[claim_name]
+    if  claim_value ~= nil then
+      if type(claim_value) == "table" then
+        set_header(header_name, table.concat(claim_value, ','))
+      else
+        set_header(header_name, claim_value)
+      end
+    else
+      clear_header(header_name)
+    end
+  end
+end
 
 local function do_authentication(conf)
   local token, err = retrieve_token(conf)
@@ -206,6 +248,16 @@ local function do_authentication(conf)
     end
   end
 
+  if #conf.scopes_required > 0 then
+    local ok, filtered_scopes = jwt:validate_scopes(conf.scopes_claim, conf.scopes_required)
+
+    if not ok then
+      return false, { status = 401, message = "Invalid scope" }
+    else
+      claims['_validated_scope'] = table.concat(filtered_scopes, ',')
+    end
+  end
+
   -- Retrieve the consumer
   local consumer_cache_key = kong.db.consumers:cache_key(jwt_secret.consumer.id)
   local consumer, err      = kong.cache:get(consumer_cache_key, nil,
@@ -224,6 +276,8 @@ local function do_authentication(conf)
   end
 
   set_consumer(consumer, jwt_secret, token)
+
+  set_claims_headers(claims, conf.claims_headers)
 
   return true
 end
