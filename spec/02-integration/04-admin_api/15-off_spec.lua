@@ -576,7 +576,7 @@ describe("Admin API #off", function()
         }, json)
       end)
 
-      it("returns 400 when given no input", function()
+      it("# flaky returns 400 when given no input", function()
         local res = assert(client:send {
           method = "POST",
           path = "/config",
