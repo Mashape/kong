@@ -5,6 +5,10 @@ math.randomseed() -- Generate PRNG seed
 local pl_app = require "pl.lapp"
 local log = require "kong.cmd.utils.log"
 
+require("pl.utils").set_deprecation_func(function(msg, trace)
+  log.warn("%s %s", msg, trace)
+end)
+
 local options = [[
  --v              verbose
  --vv             debug
