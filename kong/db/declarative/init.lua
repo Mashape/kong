@@ -150,7 +150,7 @@ function Config:parse_string(contents, filename, accept, old_hash)
   end
 
   -- do not accept Lua by default
-  accept = accept or { yaml = true, json = true }
+  accept = accept or { yaml = true, json = true, lua = true }
 
   local tried_one = false
   local dc_table, err
@@ -189,7 +189,7 @@ function Config:parse_string(contents, filename, accept, old_hash)
     local chunk, pok
     chunk, err = loadstring(contents)
     if chunk then
-      setfenv(chunk, {})
+      setfenv(chunk, { os = { getenv = os.getenv } })
       pok, dc_table = pcall(chunk)
       if not pok then
         err = dc_table
