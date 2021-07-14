@@ -71,6 +71,7 @@ local field_schema = {
   { legacy = { type = "boolean" }, },
   { immutable = { type = "boolean" }, },
   { err = { type = "string" } },
+  { hidden = { type = "boolean" }, },
 }
 
 for _, field in ipairs(validators) do
@@ -326,6 +327,9 @@ local attribute_types = {
   legacy = {
     ["string"] = true,
   },
+  hidden = {
+    ["string"] = true,
+  },
   unique = {
     ["string"] = true,
     ["number"] = true,
@@ -577,6 +581,12 @@ local MetaSchema = Schema.new({
     },
     {
       legacy = {
+        type = "boolean",
+        nilable = true,
+      },
+    },
+    {
+      hidden = {
         type = "boolean",
         nilable = true,
       },
